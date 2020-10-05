@@ -429,11 +429,6 @@ static int server_message_proc(void)
 			server_set_status(STATUS_TYPE_STATUS, STATUS_ERROR );
 		}
 		break;
-	case MSG_MISS_SERVER_ERROR:
-		if( server_get_status(STATUS_TYPE_STATUS) == STATUS_RUN) {
-			server_set_status(STATUS_TYPE_STATUS, STATUS_ERROR );
-		}
-		break;
 	}
 	msg_free(&msg);
 	return ret;
@@ -580,6 +575,28 @@ static void *server_func(void)
 /*
  * internal interface
  */
+int server_miss_get_info(int SID, miss_session_t *session, char *buf)
+{
+    char str_resp[1024] = { 0 };
+	char str_did[64] = { 0 };
+	char str_mac[18] = { 0 };
+	char str_version[64] = { 0 };
+    int wifi_rssi = 100;
+    //debug test hyb add
+    strcpy(str_mac, config.profile.mac);
+    strcpy(str_did, config.profile.did);
+    strcpy(str_version, APPLICATION_VERSION_STRING);
+    snprintf(str_resp, sizeof(str_resp),
+         "{\"did\":\"%s\",\"mac\":\"%s\",\"version\":\"%s\",\"rssi\":%d}", str_did, str_mac, str_version,
+         wifi_rssi);
+    int ret = miss_cmd_send(session, MISS_CMD_DEVINFO_RESP, (char *)str_resp, strlen(str_resp) + 1);
+    if (0 != ret) {
+        log_err("miss_cmd_send error, ret: %d", ret);
+        return ret;
+    }
+	return 0;
+}
+
 client_session_t *server_miss_get_client_info(void)
 {
 	return &client_session;

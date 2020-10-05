@@ -45,6 +45,7 @@
 #include "../../server/config/config_miss_interface.h"
 #include "../../server/config/config_miio_interface.h"
 #include "../../server/video/video_interface.h"
+#include "../../server/audio/audio_interface.h"
 //server header
 #include "miss_interface.h"
 #include "miss_session.h"
@@ -207,7 +208,7 @@ int miss_session_audio_start(int session_id, miss_session_t *session,char *param
 	psession_node->audio_tid = stream_pid;
     /********message body********/
 	memset(&msg,0,sizeof(message_t));
-	msg.message = MSG_MISS_SERVER_AUDIO_START;
+	msg.message = MSG_AUDIO_START;
 	msg.sender = msg.receiver = SERVER_MISS;
 	/****************************/
     if( server_audio_message(&msg)!=0 ) {
@@ -252,7 +253,7 @@ int miss_session_audio_stop(int session_id, miss_session_t *session,char *param)
 	}
 	/********message body********/
 	memset(&msg,0,sizeof(message_t));
-	msg.message = MSG_MISS_SERVER_AUDIO_STOP;
+	msg.message = MSG_AUDIO_STOP;
 	msg.sender = msg.receiver = SERVER_MISS;
 	/****************************/
 	if( server_audio_message(&msg)!=0 ) {
@@ -361,7 +362,8 @@ int miss_session_video_ctrl(miss_session_t *session,char *param)
 	msg_init(&msg);
 	msg.message = MSG_VIDEO_CTRL;
 	msg.arg_in.cat = VIDEO_CTRL_QUALITY;
-	msg.arg_in.dog = vq;
+	msg.arg = &vq;
+	msg.arg_size = sizeof(int);
 	msg.sender = msg.receiver = SERVER_MISS;
 	/****************************/
     if( server_video_message(&msg)!=0 ) {
@@ -447,7 +449,7 @@ int miss_session_del(miss_session_t *session)
         		psession_node->video_status == STREAM_NONE;
         	    /********message body********/
         		msg_init(&msg);
-        		msg.message = MSG_MISS_SERVER_VIDEO_STOP;
+        		msg.message = MSG_VIDEO_STOP;
         		/****************************/
         		server_video_message(&msg);
         	}
@@ -455,7 +457,7 @@ int miss_session_del(miss_session_t *session)
         		psession_node->audio_status == STREAM_NONE;
         	    /********message body********/
         		msg_init(&msg);
-        		msg.message = MSG_MISS_SERVER_AUDIO_STOP;
+        		msg.message = MSG_AUDIO_STOP;
         		/****************************/
 //        		server_audio_message(&msg);
         	}

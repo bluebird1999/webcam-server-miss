@@ -32,10 +32,7 @@
 #include <miss.h>
 #include <miss_porting.h>
 //program header
-#include "../../tools/cJSON/cJSON.h"
-#include "../../tools/json/json.h"
-#include "../../tools/log.h"
-#include "../../tools/misc.h"
+#include "../../tools/tools_interface.h"
 #include "../../server/miio/miio_interface.h"
 //server header
 #include "miss.h"
@@ -59,6 +56,7 @@ static int cmd_speaker_start(int SID, miss_session_t *session, char *buf);
 static int cmd_speaker_stop(int SID, miss_session_t *session, char *buf);
 static int cmd_video_ctrl(int SID, miss_session_t *session, char *buf);
 static int cmd_getaudio_farmat(int SID, miss_session_t *session, char *buf);
+static int cmd_get_devinfo(int SID, miss_session_t *session, char *buf);
 
 /*
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -161,8 +159,7 @@ static int cmd_speaker_start(int SID, miss_session_t *session, char *buf)
     log_info("miss porting speaker start\n");
     ret = miss_session_speaker_start(session, buf);
 	ret = miss_cmd_send(session, MISS_CMD_SPEAKER_START_RESP, (void*)&ret, sizeof(int));
-	if (0 != ret)
-	{
+	if (0 != ret) {
 		log_err("miss_cmd_send error, ret: %d", ret);
 	}
 	return 0;
@@ -213,7 +210,13 @@ static int cmd_getaudio_farmat(int SID, miss_session_t *session, char *buf)
 	return 0;
 }
 
-
+static int cmd_get_devinfo(int SID, miss_session_t *session, char *buf)
+{
+	int ret;
+    log_info("miss porting get device info\n");
+    ret = server_miss_get_info(SID, session, buf);
+	return ret;
+}
 
 /*
  * interface & porting implementation
@@ -245,13 +248,13 @@ int miss_rpc_send(void *rpc_id, const char *method, const char *params)
 	message_t msg;
     /********message body********/
 	msg_init(&msg);
-	msg.uid = msg_id;
+	msg.arg_in.cat = msg_id;
 	msg.message = MSG_MIIO_RPC_SEND;
 	msg.sender = SERVER_MISS;
 	msg.arg = params;
 	msg.arg_size = strlen(params);
 	msg.extra = method;
-	msg.extra_size = strlen(params);
+	msg.extra_size = strlen(method);
 	/***************************/
 	server_miio_message(&msg);
 }
@@ -265,7 +268,7 @@ int miss_statistics(miss_session_t *session, void *data, int len)
 	message_t msg;
     /********message body********/
 	msg_init(&msg);
-	msg.uid = msg_id;
+	msg.arg_in.cat = msg_id;
 	msg.message = MSG_MIIO_RPC_REPORT_SEND;
 	msg.sender = SERVER_MISS;
 	msg.arg = data;
@@ -336,13 +339,22 @@ int miss_on_disconnect(miss_session_t *session, miss_error_e error, void *user_d
 void miss_on_audio_data(miss_session_t *session,
 		miss_frame_header_t *frame_header, void *data, void *user_data)
 {
-    printf("audio frame_header->length:%d\n", frame_header->length);
-
+	message_t msg;
+	int ret = 0;
     if (frame_header->length > 0) {
-    	//hyb todo
-    	//frame_header->codec_id:MISS_CODEC_AUDIO_PCM,MISS_CODEC_AUDIO_ADPCM,MISS_CODEC_AUDIO_G711U, MISS_CODEC_AUDIO_G711A
-        //play_audio_frame(data, frame->length);
- //       netcam_audio_output(data, frame_header->length, NETCAM_AUDIO_ENC_A_LAW, 1);
+        /********message body********/
+    	msg_init(&msg);
+    	msg.message = MSG_SPEAKER_AUDIO_DATA;
+    	msg.sender = msg.receiver = SERVER_MISS;
+    	msg.arg_in.cat = frame_header->codec_id;
+    	msg.arg_in.dog = frame_header->flags;
+    	msg.arg_in.chick = frame_header->sequence;
+    	msg.arg_in.duck = frame_header->timestamp_s;
+    	msg.arg = data;
+    	msg.arg_size = frame_header->length;
+//    	ret = server_speaker_message(&msg);
+    	/***************************/
+
     }
 
 }
@@ -402,7 +414,7 @@ void miss_on_cmd(miss_session_t *session, miss_cmd_e cmd,
 //		cmd_playback_set_speed(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_DEVINFO_REQ:
-//		cmd_get_devinfo(sessionnum, session, (char*)params);
+		cmd_get_devinfo(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_MOTOR_REQ:
 //		cmd_motor_ctrl(sessionnum, session, (char*)params);

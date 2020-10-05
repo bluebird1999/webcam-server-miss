@@ -54,5 +54,6 @@ client_session_t *server_miss_get_client_info(void);
 server_info_t *server_miss_get_server_info(void);
 void *session_stream_send_video_func(void *arg);
 void *session_stream_send_audio_func(void *arg);
+int server_miss_get_info(int SID, miss_session_t *session, char *buf);
 
 #endif /* SERVER_MISS_LOCAL_H_ */
