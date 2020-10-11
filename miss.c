@@ -150,7 +150,8 @@ static int session_send_video_stream(int chn_id, message_t *msg)
     frame_info.flags |= FLAG_STREAM_TYPE_LIVE << 11;
     frame_info.flags |= FLAG_WATERMARK_TIMESTAMP_NOT_EXIST << 13;
     frame_info.codec_id = MISS_CODEC_VIDEO_H264;
-    if( h264_is_iframe( &p[4] )  )// I frame
+    flag = p[4];
+    if( flag != 0x41  )// I frame
     	frame_info.flags |= FLAG_FRAME_TYPE_IFRAME << 0;
     else
     	frame_info.flags |= FLAG_FRAME_TYPE_PBFRAME << 0;

@@ -363,7 +363,7 @@ int miss_session_video_ctrl(miss_session_t *session,char *param)
 	msg.message = MSG_VIDEO_CTRL;
 	msg.arg_in.cat = VIDEO_CTRL_QUALITY;
 	msg.arg = &vq;
-	msg.arg_size = sizeof(int);
+	msg.arg_size = sizeof(vq);
 	msg.sender = msg.receiver = SERVER_MISS;
 	/****************************/
     if( server_video_message(&msg)!=0 ) {
