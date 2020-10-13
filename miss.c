@@ -434,6 +434,26 @@ static int server_message_proc(void)
 	return ret;
 }
 
+static int heart_beat_proc(void)
+{
+	int ret = 0;
+	message_t msg;
+	long long int tick = 0;
+	tick = time_get_now_stamp();
+	if( (tick - info.tick) > 10 ) {
+		info.tick = tick;
+	    /********message body********/
+		msg_init(&msg);
+		msg.message = MSG_MANAGER_HEARTBEAT;
+		msg.sender = msg.receiver = SERVER_MISS;
+		msg.arg_in.cat = info.status;
+		msg.arg_in.dog = info.thread_start;
+		ret = manager_message(&msg);
+		/***************************/
+	}
+	return ret;
+}
+
 /*
  * State Machine
  */
@@ -553,6 +573,7 @@ static void *server_func(void)
 			break;
 		}
 		server_message_proc();
+		heart_beat_proc();
 	}
 	server_release();
 	if( server_get_status(STATUS_TYPE_EXIT) ) {
@@ -702,6 +723,8 @@ int server_miss_start(void)
 	int ret=-1;
 	msg_buffer_init(&message, MSG_BUFFER_OVERFLOW_NO);
 	pthread_rwlock_init(&info.lock, NULL);
+	pthread_rwlock_init(&video_buff.lock, NULL);
+	pthread_rwlock_init(&audio_buff.lock, NULL);
 	ret = pthread_create(&info.id, NULL, server_func, NULL);
 	if(ret != 0) {
 		log_err("miss server create error! ret = %d",ret);
