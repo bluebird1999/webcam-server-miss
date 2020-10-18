@@ -10,6 +10,8 @@
  */
 //system header
 #include <stdio.h>
+#include <malloc.h>
+#include <dmalloc.h>
 //program header
 
 //server header

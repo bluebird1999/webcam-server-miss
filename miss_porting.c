@@ -31,6 +31,8 @@
 #include <json-c/json.h>
 #include <miss.h>
 #include <miss_porting.h>
+#include <malloc.h>
+#include <dmalloc.h>
 //program header
 #include "../../tools/tools_interface.h"
 #include "../../server/miio/miio_interface.h"
@@ -38,8 +40,6 @@
 #include "miss.h"
 #include "miss_interface.h"
 #include "miss_local.h"
-#include "miss_session.h"
-#include "miss_session_list.h"
 
 /*
  * static
@@ -48,15 +48,6 @@
 static 	miss_msg_t 	miss_msg;
 //function
 static int rdt_cmd_parse(char *buf, int len, miss_session_t *session, int enableRdt);
-static int cmd_video_start(int SID, miss_session_t *session, char *buf);
-static int cmd_video_stop(int SID, miss_session_t *session, char *buf);
-static int cmd_audio_start(int SID, miss_session_t *session, char *buf);
-static int cmd_audio_stop(int SID, miss_session_t *session, char *buf);
-static int cmd_speaker_start(int SID, miss_session_t *session, char *buf);
-static int cmd_speaker_stop(int SID, miss_session_t *session, char *buf);
-static int cmd_video_ctrl(int SID, miss_session_t *session, char *buf);
-static int cmd_getaudio_farmat(int SID, miss_session_t *session, char *buf);
-static int cmd_get_devinfo(int SID, miss_session_t *session, char *buf);
 
 /*
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -123,101 +114,6 @@ static int rdt_cmd_parse(char *buf, int len, miss_session_t *session, int enable
     return 0;
 }
 
-static int cmd_video_start(int SID, miss_session_t *session, char *buff)
-{
-    int ret = 0;
-    log_info("miss porting video start\n");
-    miss_session_video_start(SID, session, buff);
-	return 0;
-}
-
-static int cmd_video_stop(int SID, miss_session_t *session, char *buf)
-{
-    log_info("miss porting video stop\n");
-	miss_session_video_stop(SID, session, buf);
-	return 0;
-}
-
-static int cmd_audio_start(int SID, miss_session_t *session, char *buf)
-{
-    log_info("miss porting audio start\n");
-    miss_session_audio_start(SID, session, buf);
-	return 0;
-}
-
-static int cmd_audio_stop(int SID, miss_session_t *session, char *buf)
-{
-    log_info("miss porting audio stop\n");
-    miss_session_audio_stop(SID, session, buf);
-	return 0;
-}
-
-static int cmd_speaker_start(int SID, miss_session_t *session, char *buf)
-{
-    int ret = 0;
-
-    log_info("miss porting speaker start\n");
-    ret = miss_session_speaker_start(session, buf);
-	ret = miss_cmd_send(session, MISS_CMD_SPEAKER_START_RESP, (void*)&ret, sizeof(int));
-	if (0 != ret) {
-		log_err("miss_cmd_send error, ret: %d", ret);
-	}
-	return 0;
-}
-
-static int cmd_speaker_stop(int SID, miss_session_t *session, char *buf)
-{
-	int ret = 0;
-
-    log_info("miss porting speaker stop\n");
-    ret = miss_session_speaker_stop(session, buf);
-	//ret = miss_cmd_send(session, MISS_CMD_SPEAKER_START_RESP, (void*)&ret, sizeof(int));
-	if (0 != ret) {
-		log_err("miss_cmd_send error, ret: %d", ret);
-	}
-
-	return 0;
-}
-
-static int cmd_video_ctrl(int SID, miss_session_t *session, char *buff)
-{
-	int ret = 0;
-	int video_quality = 0;
-	int code = 0;
-
-    if( miss_session_video_ctrl(session,buff) == 0) {
-    	code = MISS_NO_ERROR;
-    	miss_cmd_send(session, MISS_CMD_STREAM_CTRL_RESP, (void*)&code, sizeof(int));
-    }
-    else {
-    	code = MISS_ERR_CLIENT_NO_SUPPORT;
-    	miss_cmd_send(session, MISS_CMD_STREAM_CTRL_RESP, (void*)&code, sizeof(int));
-    }
-	return 0;
-}
-
-static int cmd_getaudio_farmat(int SID, miss_session_t *session, char *buf)
-{
-	char audio_farmat[32] = {0};
-	int ret;
-
-    log_info("miss porting get audio framat\n");
-//	miss_session_getaudio_farmat(audio_farmat);
-	ret = miss_cmd_send(session, MISS_CMD_GET_AUDIO_FORMAT_RESP,(void*)audio_farmat, strlen(audio_farmat)+1);
-	if (0 != ret) {
-		log_err("miss_cmd_send error, ret: %d", ret);
-	}
-	return 0;
-}
-
-static int cmd_get_devinfo(int SID, miss_session_t *session, char *buf)
-{
-	int ret;
-    log_info("miss porting get device info\n");
-    ret = server_miss_get_info(SID, session, buf);
-	return ret;
-}
-
 /*
  * interface & porting implementation
  */
@@ -252,9 +148,11 @@ int miss_rpc_send(void *rpc_id, const char *method, const char *params)
 	msg.message = MSG_MIIO_RPC_SEND;
 	msg.sender = SERVER_MISS;
 	msg.arg = params;
-	msg.arg_size = strlen(params);
+	msg.arg_size = strlen(params)+1;
 	msg.extra = method;
-	msg.extra_size = strlen(method);
+	msg.extra_size = strlen(method)+1;
+	log_info("---------params---%s---------", params);
+	log_info("---------method---%s---------", method);
 	/***************************/
 	server_miio_message(&msg);
 }
@@ -289,7 +187,7 @@ int miss_on_connect(miss_session_t *session, void **user_data)
         log_err("session is NULL return MISS_ERR_ABORTED\n");
         return MISS_ERR_ABORTED;
     }
-    log_info("[miss_session_add]miss:%d \n",session);
+    log_info("[miss_cmd_add]miss:%d \n",session);
 	if((session_id = miss_session_add(session)) < 0) {
 		log_err("miss session not valid session id, return MISS_ERR_MAX_SESSION!\n");
         //miss_server_session_close(session);
@@ -319,7 +217,6 @@ int miss_on_error(miss_session_t *session, miss_error_e error, void *user_data)
 int miss_on_disconnect(miss_session_t *session, miss_error_e error, void *user_data)
 {
 	int session_id = -1;
-
     if(!session) {
         log_err("session add:%p, user_data:%p return MISS_ERR_ABORTED\n", session, user_data);
         return MISS_ERR_ABORTED;
@@ -343,6 +240,7 @@ void miss_on_audio_data(miss_session_t *session,
 	int ret = 0;
     if (frame_header->length > 0) {
         /********message body********/
+/* wait for other server
     	msg_init(&msg);
     	msg.message = MSG_SPEAKER_AUDIO_DATA;
     	msg.sender = msg.receiver = SERVER_MISS;
@@ -352,7 +250,8 @@ void miss_on_audio_data(miss_session_t *session,
     	msg.arg_in.duck = frame_header->timestamp_s;
     	msg.arg = data;
     	msg.arg_size = frame_header->length;
-//    	ret = server_speaker_message(&msg);
+    	ret = server_speaker_message(&msg);
+ */
     	/***************************/
 
     }
@@ -384,37 +283,37 @@ void miss_on_cmd(miss_session_t *session, miss_cmd_e cmd,
 	int sessionnum = *(int*)user_data;
 	switch (cmd) {
 	case MISS_CMD_VIDEO_START:
-		cmd_video_start(sessionnum, session, (char*)params);
+		miss_cmd_video_start(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_VIDEO_STOP:
-		cmd_video_stop(sessionnum, session, (char*)params);
+		miss_cmd_video_stop(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_AUDIO_START:
-		cmd_audio_start(sessionnum, session, (char*)params);
+		miss_cmd_audio_start(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_AUDIO_STOP:
-		cmd_audio_stop(sessionnum, session, (char*)params);
+		miss_cmd_audio_stop(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_SPEAKER_START_REQ:
-		cmd_speaker_start(sessionnum, session, (char*)params);
+		miss_cmd_speaker_start(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_SPEAKER_STOP:
-		cmd_speaker_stop(sessionnum, session, (char*)params);
+		miss_cmd_speaker_stop(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_STREAM_CTRL_REQ:
-		cmd_video_ctrl(sessionnum, session, (char*)params);
+		miss_cmd_video_ctrl(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_GET_AUDIO_FORMAT_REQ:
-//		cmd_getaudio_farmat(sessionnum, session, (char*)params);
+		miss_cmd_audio_get_format(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_PLAYBACK_REQ:
-//		cmd_playback_ctrl(sessionnum, session, (char*)params);
+		miss_cmd_player_ctrl(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_PLAYBACK_SET_SPEED:
-//		cmd_playback_set_speed(sessionnum, session, (char*)params);
+		miss_cmd_player_set_speed(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_DEVINFO_REQ:
-		cmd_get_devinfo(sessionnum, session, (char*)params);
+		miss_cmd_get_devinfo(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_MOTOR_REQ:
 //		cmd_motor_ctrl(sessionnum, session, (char*)params);
