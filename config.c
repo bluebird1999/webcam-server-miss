@@ -27,7 +27,8 @@ static pthread_rwlock_t			lock;
 static int						dirty;
 static miss_config_t			miss_config;
 static config_map_t miss_config_profile_map[] = {
-    {"sdk_type",  				&(miss_config.profile.sdk_type),  			cfg_string, 'device',0, 0,32,    },
+	{"board_type",  			&(miss_config.profile.board_type),  		cfg_u32, 0,0, 0,10,    },
+	{"sdk_type",  				&(miss_config.profile.sdk_type),  			cfg_string, 'device',0, 0,32,    },
     {"max_session_num", 		&(miss_config.profile.max_session_num), 	cfg_s32, 128,0, -1,10000,    },
     {"max_video_recv_size",     &(miss_config.profile.max_video_recv_size), cfg_s32, 512000,0, -1,1000000,	},
     {"max_audio_recv_size",     &(miss_config.profile.max_audio_recv_size), cfg_s32, 51200,0, -1,1000000,  	},
@@ -37,7 +38,7 @@ static config_map_t miss_config_profile_map[] = {
 };
 
 //function
-static int miss_config_device_read(void);
+static int miss_config_device_read(int);
 static int miss_config_device_write(void);
 static int miss_config_save(void);
 
@@ -79,7 +80,7 @@ static int miss_config_save(void)
 	return ret;
 }
 
-static int miss_config_device_read(void)
+static int miss_config_device_read(int board)
 {
 	FILE *fp = NULL;
 	int pos = 0;
@@ -87,7 +88,6 @@ static int miss_config_device_read(void)
 	char *data = NULL;
 	int fileSize = 0;
 	int ret;
-    memset(&miss_config.profile, 0, sizeof(miss_profile_t));
 	//read device.conf
 	fp = fopen(CONFIG_MISS_DEVICE_PATH, "rb");
 	if (fp == NULL) {
@@ -118,26 +118,38 @@ static int miss_config_device_read(void)
     	fclose(fp);
     	char *ptr_did = 0;
     	char *ptr_key = 0;
-    	char *ptr_model = 0;
     	char *ptr_mac = 0;
-    	ptr_did = strstr(data, "did=");
-    	ptr_key = strstr(data, "key=");
-    	ptr_mac = strstr(data, "mac=");
-    	ptr_model = strstr(data, "model=");
+    	char *ptr_model = 0;
+    	char *ptr_vendor = 0;
     	char *p,*m;
-    	if(ptr_did&&ptr_key) {
+    	if( !board ) {
+			ptr_did = strstr(data, "did=");
+			ptr_key = strstr(data, "key=");
+			ptr_mac = strstr(data, "mac=");
+    	}
+    	ptr_model = strstr(data, "model=");
+    	ptr_vendor = strstr(data, "vendor=");
+    	if( !board && ptr_did && ptr_key && ptr_mac ) {
     		len = 9;//did length
     		memcpy(miss_config.profile.did,ptr_did+4,len);
     		len = 16;//key length
     		memcpy(miss_config.profile.key,ptr_key+4,len);
     		len = 17;//mac length
     		memcpy(miss_config.profile.mac,ptr_mac+4,len);
-    		p = ptr_model+6; m = miss_config.profile.model;
-    		while(*p!='\n' && *p!='\0') {
-    			memcpy(m, p, 1);
-    			m++;p++;
-    		}
-    		*m = '\0';
+    	}
+    	if( ptr_model && ptr_vendor) {
+			p = ptr_model+6; m = miss_config.profile.model;
+			while(*p!='\n' && *p!='\0') {
+				memcpy(m, p, 1);
+				m++;p++;
+			}
+			*m = '\0';
+			p = ptr_vendor+7; m = miss_config.profile.vendor;
+			while(*p!='\n' && *p!='\0') {
+				memcpy(m, p, 1);
+				m++;p++;
+			}
+			*m = '\0';
     	}
     	free(data);
     }
@@ -201,14 +213,19 @@ int config_miss_read(miss_config_t *mconfig)
 		log_err("add lock fail, ret = %d\n", ret);
 		return ret;
 	}
-	ret = miss_config_device_read();
-	ret1 |= ret;
+	memset(&miss_config.profile, 0, sizeof(miss_profile_t));
 	ret = read_config_file(&miss_config_profile_map, CONFIG_MISS_PROFILE_PATH);
 	if(!ret1) {
 		misc_set_bit(&miss_config.status, CONFIG_MISS_PROFILE,1);
 	}
 	else
 		misc_set_bit(&miss_config.status, CONFIG_MISS_PROFILE,0);
+	ret1 |= ret;
+	ret = miss_config_device_read(miss_config.profile.board_type);
+	if(!ret)
+		misc_set_bit(&miss_config.status, CONFIG_MISS_DEVICE,1);
+	else
+		misc_set_bit(&miss_config.status, CONFIG_MISS_DEVICE,0);
 	ret1 |= ret;
 	ret = pthread_rwlock_unlock(&lock);
 	if (ret)

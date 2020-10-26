@@ -36,6 +36,7 @@
 //program header
 #include "../../tools/tools_interface.h"
 #include "../../server/miio/miio_interface.h"
+#include "../../server/speaker/speaker_interface.h"
 //server header
 #include "miss.h"
 #include "miss_interface.h"
@@ -115,6 +116,23 @@ static int rdt_cmd_parse(char *buf, int len, miss_session_t *session, int enable
 }
 
 /*
+ * internal interface
+ */
+void* miss_get_context_from_id(int id)
+{
+	int i = 0;
+	for (i = 0; i < MISS_MSG_MAX_NUM; i++) {
+		if (miss_msg.msg_id[i] == id) {
+			miss_msg.msg_id[i] = 0;
+			miss_msg.timestamps[i] = 0;
+			miss_msg.msg_num --;
+			return miss_msg.rpc_id[i];
+		}
+	}
+	return 0;
+}
+
+/*
  * interface & porting implementation
  */
 int miss_rpc_send(void *rpc_id, const char *method, const char *params)
@@ -145,6 +163,7 @@ int miss_rpc_send(void *rpc_id, const char *method, const char *params)
     /********message body********/
 	msg_init(&msg);
 	msg.arg_in.cat = msg_id;
+	msg.arg_in.handler = rpc_id;
 	msg.message = MSG_MIIO_RPC_SEND;
 	msg.sender = SERVER_MISS;
 	msg.arg = params;
@@ -172,7 +191,7 @@ int miss_statistics(miss_session_t *session, void *data, int len)
 	msg.arg = data;
 	msg.arg_size = len;
 	msg.extra = "_sync.camera_perf_data";
-	msg.extra_size = strlen(msg.extra);
+	msg.extra_size = strlen(msg.extra) + 1;
 	/***************************/
 	server_miio_message(&msg);
 }
@@ -240,20 +259,14 @@ void miss_on_audio_data(miss_session_t *session,
 	int ret = 0;
     if (frame_header->length > 0) {
         /********message body********/
-/* wait for other server
     	msg_init(&msg);
-    	msg.message = MSG_SPEAKER_AUDIO_DATA;
+    	msg.message = MSG_SPEAKER_CTL_DATA;
     	msg.sender = msg.receiver = SERVER_MISS;
-    	msg.arg_in.cat = frame_header->codec_id;
-    	msg.arg_in.dog = frame_header->flags;
-    	msg.arg_in.chick = frame_header->sequence;
-    	msg.arg_in.duck = frame_header->timestamp_s;
+    	msg.arg_in.cat = SPEAKER_CTL_INTERCOM_DATA;
     	msg.arg = data;
     	msg.arg_size = frame_header->length;
     	ret = server_speaker_message(&msg);
- */
     	/***************************/
-
     }
 
 }
@@ -279,8 +292,9 @@ void miss_on_cmd(miss_session_t *session, miss_cmd_e cmd,
 		void *params, unsigned int length, void *user_data)
 {
 	log_info("miss_on_cmd sesson:%p, cmd:%d, len:%d\n", session, cmd, length);
-
 	int sessionnum = *(int*)user_data;
+	char test_player[256]={0};
+	long long int start, end;
 	switch (cmd) {
 	case MISS_CMD_VIDEO_START:
 		miss_cmd_video_start(sessionnum, session, (char*)params);
@@ -289,9 +303,22 @@ void miss_on_cmd(miss_session_t *session, miss_cmd_e cmd,
 		miss_cmd_video_stop(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_AUDIO_START:
+/*		start = time_date_to_stamp("20201025153835");
+		printf("-------------------%d",start);
+		end =   time_date_to_stamp("20201025153855");
+		printf("-------------------%d",end);
+		sprintf(test_player, "{\"starttime\":%ld,\"offset\":1,\"speed\":1,\"autoswitchtolive\":1,\"sessionid\":1,\"avchannelmerge\":1, \"endtime\":1603604395,\"op\":1}", start, end);
+		miss_cmd_player_ctrl(sessionnum, session, (char*)test_player);
+*/
 		miss_cmd_audio_start(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_AUDIO_STOP:
+/*
+		start = time_date_to_stamp("20201021200159");
+		end =   time_date_to_stamp("20201021201358");
+		strcpy(test_player,"{\"starttime\":1583078400,\"offset\":1,\"speed\":1,\"autoswitchtolive\":1,\"sessionid\":1,\"avchannelmerge\":1,\"endtime\":1583251199,\"op\":0}");
+		miss_cmd_player_ctrl(sessionnum, session, (char*)test_player);
+*/
 		miss_cmd_audio_stop(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_SPEAKER_START_REQ:
@@ -316,25 +343,11 @@ void miss_on_cmd(miss_session_t *session, miss_cmd_e cmd,
 		miss_cmd_get_devinfo(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_MOTOR_REQ:
-//		cmd_motor_ctrl(sessionnum, session, (char*)params);
+		miss_cmd_motor_ctrl(sessionnum, session, (char*)params);
 		break;
 	default:
 		log_err("unknown cmd:0x%x\n", cmd);
 		return ;
 	}
 	return ;
-}
-
-void* miss_get_context_from_id(int id)
-{
-	int i = 0;
-	for (i = 0; i < MISS_MSG_MAX_NUM; i++) {
-		if (miss_msg.msg_id[i] == id) {
-			miss_msg.msg_id[i] = 0;
-			miss_msg.timestamps[i] = 0;
-			miss_msg.msg_num --;
-			return miss_msg.rpc_id[i];
-		}
-	}
-	return 0;
 }

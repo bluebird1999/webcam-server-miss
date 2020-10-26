@@ -41,6 +41,9 @@
 #include "../../server/video/video_interface.h"
 #include "../../server/audio/audio_interface.h"
 #include "../../server/realtek/realtek_interface.h"
+#include "../../server/player/player_interface.h"
+#include "../../server/speaker/speaker_interface.h"
+#include "../../server/device/device_interface.h"
 //server header
 #include "miss.h"
 #include "miss_interface.h"
@@ -58,6 +61,7 @@ static message_buffer_t		video_buff;
 static message_buffer_t		audio_buff;
 static miss_config_t		config;
 static client_session_t		client_session;
+static player_iot_config_t  player;
 
 //function
 //common
@@ -79,7 +83,7 @@ static session_node_t *miss_session_check_node(miss_session_t *session);
 static miss_session_t *miss_session_get_node_id(int sid);
 static void *session_stream_send_audio_func(void *arg);
 static void *session_stream_send_video_func(void *arg);
-static int miss_message_callback(message_arg_t arg_pass, int result, int size, void* para);
+static int miss_message_callback(message_t *arg);
 
 /*
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -121,35 +125,58 @@ static miss_session_t *miss_session_get_node_id(int sid)
     return NULL;
 }
 
-static int miss_message_callback(message_arg_t arg_pass, int result, int size, void* para)
+static int miss_message_callback(message_t *arg)
 {
 	int ret = 0;
 	int code;
 	char audio_format[16];
 	audio_iot_config_t config;
 	pthread_t	stream_pid;
-	miss_session_t *sid = miss_session_get_node_id( arg_pass.dog );
+	message_t	msg;
+	ret = pthread_rwlock_wrlock(&info.lock);
+	if (ret) {
+		log_err("add session wrlock fail, ret = %d\n", ret);
+		return STREAM_NONE;
+	}
+	miss_session_t *sid = miss_session_get_node_id( arg->arg_pass.dog );
 	session_node_t *pnod = miss_session_check_node(sid);
 	if( sid == NULL || pnod == NULL ) {
 		log_err("session id %d isn't find!");
 		return -1;
 	}
-	switch( arg_pass.cat) {
+	switch( arg->arg_pass.cat) {
 		case MISS_ASYN_VIDEO_START:
-			log_info("\n========start new stream thread=========\n");
+			log_info("\n========start new video stream thread=========\n");
 			pnod->video_status = STREAM_START;
-			pnod->video_channel = arg_pass.duck;
+			pnod->video_channel = arg->arg_pass.duck;
+			pnod->source = SOURCE_LIVE;
+			pnod->lock = 0;
 			pthread_create(&stream_pid, NULL, session_stream_send_video_func, (void*)pnod);
 			pnod->video_tid = stream_pid;
 			break;
 		case MISS_ASYN_VIDEO_STOP:
 			pnod->video_tid = -1;
 			pnod->video_status = STREAM_NONE;
+			pnod->source = SOURCE_NONE;
+			pnod->lock = 0;
+			if( arg->arg_pass.duck == 1) { //player
+				/********message body********/
+				memset(&msg,0,sizeof(message_t));
+				msg.message = MSG_PLAYER_START;
+				msg.sender = msg.receiver = SERVER_MISS;
+				msg.arg_pass.cat = MISS_ASYN_PLAYER_START;
+				msg.arg_pass.dog = arg->arg_pass.dog;
+				msg.arg_pass.handler = miss_message_callback;
+				msg.arg = &player;
+				msg.arg_size = sizeof(player_iot_config_t);
+				server_player_message(&msg);
+				/****************************/
+			}
 			break;
 		case MISS_ASYN_AUDIO_START:
-			log_info("\n========start new stream thread=========\n");
+			log_info("\n========start new audio stream thread=========\n");
 			pnod->audio_status = STREAM_START;
-			pnod->audio_channel = arg_pass.duck;
+			pnod->audio_channel = arg->arg_pass.duck;
 			pthread_create(&stream_pid, NULL, session_stream_send_audio_func, (void*)pnod);
 			pnod->audio_tid = stream_pid;
 			break;
@@ -158,28 +185,112 @@ static int miss_message_callback(message_arg_t arg_pass, int result, int size, v
 			pnod->audio_status = STREAM_NONE;
 			break;
 		case MISS_ASYN_VIDEO_CTRL:
-			if( result == 0) code = MISS_NO_ERROR;
+			if( arg->result == 0) code = MISS_NO_ERROR;
 			else code = MISS_ERR_CLIENT_NO_SUPPORT;
 			ret = miss_cmd_send(sid,MISS_CMD_STREAM_CTRL_RESP, (void*)&code, sizeof(int));
 			break;
-		case MISS_ASYN_SPEAKER_START:
-		case MISS_ASYN_SPEAKER_STOP:
-			if( result == 0) code = MISS_NO_ERROR;
-			else code = MISS_ERR_CLIENT_NO_SUPPORT;
-			ret = miss_cmd_send(sid, MISS_CMD_SPEAKER_START_RESP, (void*)&code, sizeof(int));
-			break;
 		case MISS_ASYN_AUDIO_FORMAT:
-			config = *((audio_iot_config_t*)para);
+			config = *((audio_iot_config_t*)(arg->arg) );
 			if( config.format == RTS_A_FMT_ALAW ) strcpy(audio_format, "g711a");
 			else if( config.format == RTS_A_FMT_ULAW ) strcpy(audio_format, "g711u");
 			else if( config.format == RTS_A_FMT_AUDIO ) strcpy(audio_format, "pcm");
 			else if( config.format == RTS_A_FMT_MP3 ) strcpy(audio_format, "mp3");
 			else if( config.format == RTS_A_FMT_AAC ) strcpy(audio_format, "aac");
 			else strcpy(audio_format, "unknown");
-			if( result == 0) code = MISS_NO_ERROR;
+			if( arg->result == 0) code = MISS_NO_ERROR;
 			else code = MISS_ERR_CLIENT_NO_SUPPORT;
 			ret = miss_cmd_send(sid, MISS_CMD_GET_AUDIO_FORMAT_RESP,(void*)audio_format, strlen(audio_format)+1);
 			break;
+		case MISS_ASYN_PLAYER_START:
+			if( arg->result == 0 ) {
+				log_info("\n========start new video stream thread=========\n");
+				pnod->video_status = STREAM_START;
+				pnod->video_channel = arg->arg_pass.duck;
+				pnod->source = SOURCE_LIVE;
+				pnod->lock = 0;
+				pthread_create(&stream_pid, NULL, session_stream_send_video_func, (void*)pnod);
+				pnod->video_tid = stream_pid;
+				log_info("\n========start new audio stream thread=========\n");
+				pnod->audio_status = STREAM_START;
+				pnod->source = SOURCE_LIVE;
+				pnod->audio_channel = arg->arg_pass.duck;
+				pthread_create(&stream_pid, NULL, session_stream_send_audio_func, (void*)pnod);
+				pnod->audio_tid = stream_pid;
+				pnod->lock = 0;
+			}
+			else {
+				if( arg->arg_in.cat == 1) {//back to live
+				    /********message body********/
+					memset(&msg,0,sizeof(message_t));
+					msg.message = MSG_VIDEO_START;
+					msg.sender = msg.receiver = SERVER_MISS;
+					msg.arg_pass.cat = MISS_ASYN_VIDEO_START;
+					msg.arg_pass.dog = arg->arg_pass.dog;
+					msg.arg_pass.duck = 0;
+					msg.arg_pass.handler = miss_message_callback;
+				    server_video_message(&msg);
+					/****************************/
+				    /********message body********/
+					memset(&msg,0,sizeof(message_t));
+					msg.message = MSG_AUDIO_START;
+					msg.sender = msg.receiver = SERVER_MISS;
+					msg.arg_pass.cat = MISS_ASYN_AUDIO_START;
+					msg.arg_pass.dog = arg->arg_pass.dog;
+					msg.arg_pass.duck = 0;
+					msg.arg_pass.handler = miss_message_callback;
+				    server_audio_message(&msg);
+					/****************************/
+				}
+			}
+			ret = miss_cmd_send(sid, MISS_CMD_PLAYBACK_RESP, (void*)&arg->result, sizeof(int));
+			break;
+		case MISS_ASYN_PLAYER_STOP:
+			if( arg->result == 0 ) {
+				memset( &player, 0, sizeof(player_iot_config_t));
+				log_info("\n========stop video stream thread=========\n");
+				pnod->video_status = STREAM_NONE;
+				log_info("\n========stop audio stream thread=========\n");
+				pnod->audio_status = STREAM_NONE;
+				pnod->source = SOURCE_NONE;
+				pnod->lock = 0;
+				usleep(10000); //10ms
+				if( arg->arg_in.cat == 1) { //back to live
+				    /********message body********/
+					memset(&msg,0,sizeof(message_t));
+					msg.message = MSG_VIDEO_START;
+					msg.sender = msg.receiver = SERVER_MISS;
+					msg.arg_pass.cat = MISS_ASYN_VIDEO_START;
+					msg.arg_pass.dog = arg->arg_pass.dog;
+					msg.arg_pass.duck = 0;
+					msg.arg_pass.handler = miss_message_callback;
+				    server_video_message(&msg);
+					/****************************/
+				    /********message body********/
+					memset(&msg,0,sizeof(message_t));
+					msg.message = MSG_AUDIO_START;
+					msg.sender = msg.receiver = SERVER_MISS;
+					msg.arg_pass.cat = MISS_ASYN_AUDIO_START;
+					msg.arg_pass.dog = arg->arg_pass.dog;
+					msg.arg_pass.duck = 0;
+					msg.arg_pass.handler = miss_message_callback;
+				    server_audio_message(&msg);
+					/****************************/
+				}
+			}
+			ret = miss_cmd_send(sid, MISS_CMD_PLAYBACK_RESP, (void*)&arg->result, sizeof(int));
+			break;
+		case MISS_ASYN_SPEAKER_START:
+			if( arg->result == 0) code = MISS_NO_ERROR;
+			else code = MISS_ERR_CLIENT_NO_SUPPORT;
+			ret = miss_cmd_send(sid, MISS_CMD_SPEAKER_START_RESP, (void*)&arg->result, sizeof(int));
+			break;
+		case MISS_ASYN_SPEAKER_STOP:
+		case MISS_ASYN_SPEAKER_CTRL:
+			break;
+	}
+    ret = pthread_rwlock_unlock(&info.lock);
+	if (ret) {
+		log_err("add session unlock fail, ret = %d\n", ret);
 	}
 	return ret;
 }
@@ -211,12 +322,13 @@ static stream_status_t session_get_node_status(session_node_t *node, int mode)
 static void *session_stream_send_video_func(void *arg)
 {
 	session_node_t *node=(session_node_t*)arg;
-    int ret, ret1, channel;
+    int ret, ret1, channel,source;
     message_t	msg;
 
     misc_set_bit(&info.thread_start, THREAD_VIDEO, 1);
     misc_set_thread_name("miss_server_video_stream");
     channel = node->video_channel;
+    source = node->source;
     pthread_detach(pthread_self());
     msg_buffer_init(&video_buff, MSG_BUFFER_OVERFLOW_YES);
     while( !server_get_status(STATUS_TYPE_EXIT)
@@ -254,11 +366,12 @@ static void *session_stream_send_video_func(void *arg)
 static void *session_stream_send_audio_func(void *arg)
 {
 	session_node_t *node=(session_node_t*)arg;
-    int ret, ret1, channel;
+    int ret, ret1, channel, source;
     message_t	msg;
     misc_set_bit(&info.thread_start, THREAD_AUDIO, 1);
     misc_set_thread_name("miss_server_audio_stream");
     channel = node->audio_channel;
+    source = node->source;
     pthread_detach(pthread_self());
     msg_buffer_init(&audio_buff, MSG_BUFFER_OVERFLOW_YES);
 
@@ -299,29 +412,17 @@ static int session_send_video_stream(int chn_id, message_t *msg)
 	client_session_t* pclient_session = &client_session;
     miss_frame_header_t frame_info = {0};
     int ret;
-    int flag;
     av_data_info_t	*avinfo;
     unsigned char	*p;
-
     p = (unsigned char*)msg->extra;
+    if( p==NULL || msg->arg==NULL ) return -1;
     avinfo = (av_data_info_t*)(msg->arg);
     frame_info.timestamp = avinfo->timestamp;
     frame_info.timestamp_s = avinfo->timestamp/1000;
     frame_info.sequence = avinfo->frame_index;
     frame_info.length = msg->extra_size;
-    frame_info.flags |= FLAG_STREAM_TYPE_LIVE << 11;
-    frame_info.flags |= FLAG_WATERMARK_TIMESTAMP_NOT_EXIST << 13;
     frame_info.codec_id = MISS_CODEC_VIDEO_H264;
-    flag = p[4];
-    if( flag != 0x41  )// I frame
-    	frame_info.flags |= FLAG_FRAME_TYPE_IFRAME << 0;
-    else
-    	frame_info.flags |= FLAG_FRAME_TYPE_PBFRAME << 0;
-    if(chn_id == 0)
-        frame_info.flags |= FLAG_RESOLUTION_VIDEO_1080P << 17;
-    else
-        frame_info.flags |= FLAG_RESOLUTION_VIDEO_360P << 17;
-
+    frame_info.flags = avinfo->flag;
 	ret = pthread_rwlock_wrlock(&info.lock);
 	if (ret) {
 		log_err("add session wrlock fail, ret = %d\n", ret);
@@ -357,16 +458,15 @@ static int session_send_audio_stream(int chn_id, message_t *msg)
     int ret;
     av_data_info_t *avinfo;
     unsigned char	*p;
-
     p = (unsigned char*)msg->extra;
+    if( p==NULL || msg->arg==NULL ) return -1;
     avinfo = (av_data_info_t*)msg->arg;
     frame_info.timestamp = avinfo->timestamp;
     frame_info.timestamp_s = avinfo->timestamp/1000;
     frame_info.sequence = avinfo->frame_index;
     frame_info.length = msg->extra_size;
     frame_info.codec_id = MISS_CODEC_AUDIO_G711A;
-    frame_info.flags = FLAG_AUDIO_SAMPLE_8K << 3 | FLAG_AUDIO_DATABITS_16 << 7 | FLAG_AUDIO_CHANNEL_MONO << 9 |  FLAG_RESOLUTION_AUDIO_DEFAULT << 17;
-
+    frame_info.flags = avinfo->flag;
 	ret = pthread_rwlock_wrlock(&info.lock);
 	if (ret) {
 		log_err("add session wrlock fail, ret = %d\n", ret);
@@ -410,7 +510,8 @@ static int miss_server_connect(void)
     memset(&client_session, 0, sizeof(client_session_t));
     miss_list_init(&client_session.head);
 
-    strcpy(key, config.profile.key);
+    if( !config.profile.board_type )
+    	strcpy(key, config.profile.key);
     strcpy(did, config.profile.did);
     strcpy(model, config.profile.model);
     strcpy(token, config.profile.token);
@@ -421,8 +522,10 @@ static int miss_server_connect(void)
 	server.max_audio_recv_size = config.profile.max_audio_recv_size;
 	server.max_video_send_size = config.profile.max_video_send_size;
 	server.max_audio_send_size = config.profile.max_audio_send_size;
-	server.device_key = key;
-	server.device_key_len = strlen((char*)key);
+	if( !config.profile.board_type ) {
+		server.device_key = key;
+		server.device_key_len = strlen((char*)key);
+	}
 	server.device_token = token;
 	server.device_token_len = strlen((char*)token);
 	server.length = sizeof(miss_server_config_t);
@@ -546,6 +649,7 @@ static int server_message_proc(void)
 	int ret = 0, ret1 = 0;
 	message_t msg;
 	message_t send_msg;
+	void *msg_id = NULL;
 	msg_init(&msg);
 	msg_init(&send_msg);
 	int st;
@@ -574,10 +678,11 @@ static int server_message_proc(void)
 			((HANDLER)msg.arg_in.handler)();
 			break;
 		case MSG_MIIO_CLOUD_CONNECTED:
-			if( server_get_status(STATUS_TYPE_STATUS) == STATUS_WAIT) {
-				if( server_get_status(STATUS_TYPE_CONFIG) == ( (1<<CONFIG_MISS_MODULE_NUM) -1 ) )
-					server_set_status(STATUS_TYPE_STATUS, STATUS_SETUP);
-			}
+			misc_set_bit( &info.thread_exit, MISS_INIT_CONDITION_MIIO_CONNECTED, 1);
+			break;
+		case MSG_MIIO_DID_ACUIRED:
+			strcpy( config.profile.did, (char*)(msg.arg));
+			misc_set_bit( &info.thread_exit, MISS_INIT_CONDITION_MIIO_DID, 1);
 			break;
 		case MSG_MIIO_MISSRPC_ERROR:
 			if( server_get_status(STATUS_TYPE_STATUS) == STATUS_RUN) {
@@ -593,8 +698,27 @@ static int server_message_proc(void)
 		case MSG_AUDIO_GET_PARA_ACK:
 		case MSG_AUDIO_START_ACK:
 		case MSG_AUDIO_STOP_ACK:
+		case MSG_PLAYER_START_ACK:
+		case MSG_PLAYER_STOP_ACK:
 			if( msg.arg_pass.handler != NULL)
-				( *( int(*)(message_arg_t,int,int,void*) ) msg.arg_pass.handler ) (msg.arg_pass, msg.result, msg.arg_size, msg.arg);
+				( *( int(*)(message_t*) ) msg.arg_pass.handler ) (&msg);
+			break;
+		case MSG_MISS_RPC_SEND:
+			if( msg.arg_in.cat == -1 ) {
+				ret = miss_rpc_process(NULL, (char*)msg.arg, msg.arg_size);
+			}
+			else {
+				msg_id = miss_get_context_from_id(msg.arg_in.cat);
+				if (NULL != msg_id) {
+					log_debug("miss_rpc_process id:%d\n",msg.arg_in.cat);
+					ret = miss_rpc_process(msg_id, (char*)msg.arg, msg.arg_size);
+				}
+			}
+			if (ret != MISS_NO_ERROR) {
+				log_err("miss_rpc_process err:%d\n",ret);
+		//		server_miss_message(MSG_MIIO_MISSRPC_ERROR,NULL);
+				ret = 0;
+			}
 			break;
 		default:
 			log_err("not processed message = %d", msg.message);
@@ -618,6 +742,7 @@ static int heart_beat_proc(void)
 		msg.sender = msg.receiver = SERVER_MISS;
 		msg.arg_in.cat = info.status;
 		msg.arg_in.dog = info.thread_start;
+		msg.arg_in.duck = info.thread_exit;
 		ret = manager_message(&msg);
 		/***************************/
 	}
@@ -650,19 +775,32 @@ static void task_default(void)
 	int ret = 0;
 	switch( info.status ){
 		case STATUS_NONE:
-			ret = config_miss_read(&config);
-			if( ret == 0 )
-				server_set_status(STATUS_TYPE_STATUS, STATUS_WAIT);
+			if( !misc_get_bit( info.thread_exit, MISS_INIT_CONDITION_CONFIG ) ) {
+				ret = config_miss_read(&config);
+				if( !ret && misc_full_bit(config.status, CONFIG_MISS_MODULE_NUM) ) {
+					misc_set_bit(&info.thread_exit, MISS_INIT_CONDITION_CONFIG, 1);
+				}
+				else {
+					info.status = STATUS_ERROR;
+					break;
+				}
+			}
+			int actual_init_num = MISS_INIT_CONDITION_NUM;
+			if( !config.profile.board_type )
+				actual_init_num--;
+			if( misc_full_bit( info.thread_exit, actual_init_num ) )
+				info.status = STATUS_WAIT;
 			else
-				sleep(1);
+				usleep(100000);
 			break;
 		case STATUS_WAIT:
+			info.status = STATUS_SETUP;
 			break;
 		case STATUS_SETUP:
 		    if(miss_server_connect() < 0) {
 		        log_err("create session server fail");
 		        server_set_status(STATUS_TYPE_STATUS, STATUS_ERROR);
-		        return;
+		        break;
 		    }
 		    log_info("create session server finished");
 		    server_set_status(STATUS_TYPE_STATUS, STATUS_IDLE);
@@ -898,18 +1036,30 @@ int miss_cmd_audio_stop(int session_id, miss_session_t *session,char *param)
 int miss_cmd_speaker_start(int session_id, miss_session_t *session, char *param)
 {
     int ret;
+    message_t	msg;
+    log_info("speaker start param string content: %s\n", param);
 	ret = pthread_rwlock_wrlock(&info.lock);
 	if (ret) {
 		log_err("add session wrlock fail, ret = %d\n", ret);
 		return -1;
 	}
 	session_node_t *psession_node = miss_session_check_node(session);
-	if( psession_node==NULL ) {
-		log_err("Session wasn't find during speaker start command!");
-		ret = pthread_rwlock_unlock(&info.lock);
-		return -1;
-	}
-    ret = pthread_rwlock_unlock(&info.lock);
+    if( psession_node==NULL ) {
+    	log_err("Session wasn't find during video start command!");
+    	ret = pthread_rwlock_unlock(&info.lock);
+    	return -1;
+    }
+    /********message body********/
+	memset(&msg,0,sizeof(message_t));
+	msg.message = MSG_SPEAKER_CTL_PLAY;
+	msg.sender = msg.receiver = SERVER_MISS;
+	msg.arg_in.cat = SPEAKER_CTL_INTERCOM_START;
+	msg.arg_pass.cat = MISS_ASYN_SPEAKER_START;
+	msg.arg_pass.dog = session_id;
+	msg.arg_pass.handler = miss_message_callback;
+    server_speaker_message(&msg);
+	/****************************/
+	ret = pthread_rwlock_unlock(&info.lock);
 	if (ret) {
 		log_err("add session unlock fail, ret = %d\n", ret);
 	}
@@ -919,12 +1069,30 @@ int miss_cmd_speaker_start(int session_id, miss_session_t *session, char *param)
 int miss_cmd_speaker_stop(int session_id, miss_session_t *session, char *param)
 {
     int ret;
+    message_t	msg;
+    log_info("speaker stop param string content: %s\n", param);
 	ret = pthread_rwlock_wrlock(&info.lock);
 	if (ret) {
 		log_err("add session wrlock fail, ret = %d\n", ret);
 		return -1;
 	}
-    ret = pthread_rwlock_unlock(&info.lock);
+	session_node_t *psession_node = miss_session_check_node(session);
+    if( psession_node==NULL ) {
+    	log_err("Session wasn't find during video start command!");
+    	ret = pthread_rwlock_unlock(&info.lock);
+    	return -1;
+    }
+    /********message body********/
+	memset(&msg,0,sizeof(message_t));
+	msg.message = MSG_SPEAKER_CTL_PLAY;
+	msg.sender = msg.receiver = SERVER_MISS;
+	msg.arg_in.cat = SPEAKER_CTL_INTERCOM_STOP;
+	msg.arg_pass.cat = MISS_ASYN_SPEAKER_STOP;
+	msg.arg_pass.dog = session_id;
+	msg.arg_pass.handler = miss_message_callback;
+    server_speaker_message(&msg);
+	/****************************/
+	ret = pthread_rwlock_unlock(&info.lock);
 	if (ret) {
 		log_err("add session unlock fail, ret = %d\n", ret);
 	}
@@ -936,7 +1104,7 @@ int miss_cmd_video_ctrl(int session_id, miss_session_t *session,char *param)
     int ret = 0, vq;
 	ret = json_verify_get_int(param, "videoquality", (int *)&vq);
 	if (ret < 0) {
-		log_info("IOTYPE_USER_IPCAM_SETSTREAMCTRL_REQ: %u\n", (unsigned int)vq);
+		log_info("IOTYPE_USER_IPCAM_SETSTREAMCTRL_REQ: %u\n", (int)vq);
 		return -1;
 	} else {
 		log_info("IOTYPE_USER_IPCAM_SETSTREAMCTRL_REQ, content: %s\n", param);
@@ -964,6 +1132,59 @@ int miss_cmd_video_ctrl(int session_id, miss_session_t *session,char *param)
 	msg.arg_pass.dog = session_id;
 	msg.arg_pass.handler = miss_message_callback;
 	server_video_message(&msg);
+	/****************************/
+    ret = pthread_rwlock_unlock(&info.lock);
+	if (ret) {
+		log_err("add session unlock fail, ret = %d\n", ret);
+	}
+    return 0;
+}
+
+int miss_cmd_motor_ctrl(int session_id, miss_session_t *session,char *param)
+{
+    int ret = 0;
+    static int direction = 0, op = 0;
+    log_info("motor param string content: %s\n", param);
+	ret = json_verify_get_int(param, "motor_operation", (int *)&direction);
+	if (ret == 0) {
+		log_info("motor direction: %d\n", (int)direction);
+	}
+	ret = json_verify_get_int(param, "operation", (int *)&op);
+	if (ret ==0 ) {
+		log_info("motor operation: %d\n", (int)op);
+	}
+    ret = pthread_rwlock_wrlock(&info.lock);
+	if (ret) {
+		log_err("add session wrlock fail, ret = %d\n", ret);
+		return -1;
+	}
+	session_node_t *psession_node = miss_session_check_node(session);
+    if( psession_node==NULL ) {
+    	log_err("Session wasn't find during video start command!");
+    	ret = pthread_rwlock_unlock(&info.lock);
+    	return -1;
+    }
+    /********message body********/
+    if( op != 0 && direction ) {
+		message_t msg;
+		msg_init(&msg);
+		if(  direction == 1 )
+			msg.message = DEVICE_CTRL_MOTOR_VER_UP;
+		else if( direction == 2)
+			msg.message = DEVICE_CTRL_MOTOR_VER_DOWN;
+		else if( direction == 3)
+			msg.message = DEVICE_CTRL_MOTOR_HOR_LEFT;
+		else if( direction == 6)
+			msg.message = DEVICE_CTRL_MOTOR_HOR_RIGHT;
+		msg.sender = msg.receiver = SERVER_MISS;
+		msg.arg_in.cat = op;
+		msg.arg_pass.cat = MISS_ASYN_MOTOR_CTRL;
+		msg.arg_pass.dog = session_id;
+		msg.arg_pass.handler = miss_message_callback;
+		ret = server_device_message(&msg);
+		direction = 0;
+		op = 0;
+	}
 	/****************************/
     ret = pthread_rwlock_unlock(&info.lock);
 	if (ret) {
@@ -1009,12 +1230,137 @@ int miss_cmd_audio_get_format(int session_id, miss_session_t *session, char *par
 
 int miss_cmd_player_ctrl(int session_id, miss_session_t *session, char *param)
 {
-    int ret;
+	int ret = -1;
+	int id = -1;
+    unsigned long long starttime = 0;
+    unsigned long long endtime = 0;
+	unsigned int switchtolive = 0;
+	unsigned int offset = 0;
+	unsigned int speed = 1;
+	unsigned int avchannelmerge = 0;
+	char *msg = param;
+	int op;
+	message_t	message;
+
+	log_info ("Receive a msg: %s\n", msg);
+	ret = json_verify_get_int(msg, "sessionid", (int *)&id);
+	if (ret < 0) {
+		log_info ("error param: id is needed\n");
+		return -1;
+	}
+    ret = json_verify_get_int(msg, "starttime", &starttime);
+	if (ret < 0) {
+		log_info ("error param: starttime is needed\n");
+		return -1;
+	}
+    ret = json_verify_get_int(msg, "endtime", &endtime);
+	if (ret < 0) {
+		log_info ("error param: endtime is needed\n");
+		return -1;
+	}
+	log_info("starttime: %llu endtime:%llu\n",starttime,endtime);
+	ret = json_verify_get_int(msg, "autoswitchtolive", (int *)&switchtolive);
+	if (ret < 0) {
+		log_info ("error param: switchtolive is needed\n");
+		return -1;
+	}
+	ret = json_verify_get_int(msg, "offset", (int *)&offset);
+	if (ret < 0) {
+		log_info ("error param: offset is needed\n");
+		return -1;
+	}
+	ret = json_verify_get_int(msg, "speed", (int *)&speed);
+	if (ret < 0) {
+		speed = 1;
+	} else {
+		if (speed != 1 && speed != 4 && speed != 16) {
+			log_info ("speed can only be 1/4/16 for now\n");
+				return -1;
+		}
+	}
+	ret = json_verify_get_int(msg, "avchannelmerge", (int *)&avchannelmerge);
+	if (ret < 0) {
+		avchannelmerge = 0;
+	} else {
+		avchannelmerge = 1;
+	}
+	/*
+	ret = json_verify_get_int(msg, "op", (int *)&op);
+	if (ret < 0) {
+		op = 0;
+	} else {
+		op = 1;
+	}
+	*/
 	ret = pthread_rwlock_wrlock(&info.lock);
 	if (ret) {
 		log_err("add session wrlock fail, ret = %d\n", ret);
 		return -1;
 	}
+    session_node_t *psession_node = miss_session_check_node(session);
+    if( psession_node==NULL ) {
+    	log_err("Session wasn't find during audio check command!");
+    	ret = pthread_rwlock_unlock(&info.lock);
+    	return -1;
+    }
+	player.start = starttime;
+	player.end = endtime;
+	player.offset = offset;
+	player.speed = speed;
+	player.switch_to_live = switchtolive;
+	player.want_to_stop = 0;
+	player.channel_merge = avchannelmerge;
+    if(1) {
+		if( psession_node->source == SOURCE_LIVE  &&
+				psession_node->video_status == STREAM_START ) {
+				/********message body********/
+				memset(&message,0,sizeof(message_t));
+				message.message = MSG_VIDEO_STOP;
+				message.sender = message.receiver = SERVER_MISS;
+				message.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
+				message.arg_pass.dog = session_id;
+				message.arg_pass.duck = 1; //launch player afterwards
+				message.arg_pass.handler = miss_message_callback;
+				server_video_message(&message);
+				/****************************/
+				if( psession_node->audio_status == STREAM_START ) {
+						/********message body********/
+						memset(&msg,0,sizeof(message_t));
+						message.message = MSG_AUDIO_STOP;
+						message.sender = message.receiver = SERVER_MISS;
+						message.arg_pass.cat = MISS_ASYN_AUDIO_STOP;
+						message.arg_pass.dog = session_id;
+						message.arg_pass.duck = 1;
+						message.arg_pass.handler = miss_message_callback;
+						server_audio_message(&message);
+						/****************************/
+				}
+    	}
+		else {
+			/********message body********/
+			memset(&message,0,sizeof(message_t));
+			message.message = MSG_PLAYER_START;
+			message.sender = message.receiver = SERVER_MISS;
+			message.arg_pass.cat = MISS_ASYN_PLAYER_START;
+			message.arg_pass.dog = session_id;
+			message.arg_pass.handler = miss_message_callback;
+			message.arg = &player;
+			message.arg_size = sizeof(player_iot_config_t);
+			server_player_message(&message);
+			/****************************/
+		}
+    }
+    else {
+		/********message body********/
+		memset(&message,0,sizeof(message_t));
+		message.message = MSG_PLAYER_STOP;
+		message.sender = message.receiver = SERVER_MISS;
+		message.arg_pass.cat = MISS_ASYN_PLAYER_STOP;
+		message.arg_pass.dog = session_id;
+		message.arg_pass.handler = miss_message_callback;
+		server_player_message(&message);
+		/****************************/
+    }
     ret = pthread_rwlock_unlock(&info.lock);
 	if (ret) {
 		log_err("add session unlock fail, ret = %d\n", ret);
@@ -1042,13 +1388,11 @@ int miss_session_add(miss_session_t *session)
     session_node_t *session_node = NULL;
     int session_id = -1;
     int ret;
-
 	ret = pthread_rwlock_wrlock(&info.lock);
 	if (ret) {
 		log_err("add session wrlock fail, ret = %d\n", ret);
 		return -1;
 	}
-
     if(client_session.use_session_num >= MAX_CLIENT_NUMBER) {
     	log_err("use_session_num:%d max:%d!\n", client_session.use_session_num, MAX_CLIENT_NUMBER);
     	goto SESSION_ADD_ERR;
@@ -1064,14 +1408,12 @@ int miss_session_add(miss_session_t *session)
     miss_list_add_tail(&(session_node->list), &(client_session.head));
     session_id = client_session.use_session_num;
     client_session.use_session_num ++;
-
     ret = pthread_rwlock_unlock(&info.lock);
 	if (ret) {
 		log_err("add session unlock fail, ret = %d\n", ret);
 	}
 	log_info("[miss_session_add]miss:%d session_node->session:%d\n",session,session_node->session);
     return session_id;
-
 SESSION_ADD_ERR:
     ret = pthread_rwlock_unlock(&info.lock);
 	if (ret) {
@@ -1085,7 +1427,6 @@ int miss_session_del(miss_session_t *session)
 {
     int ret = -1;
     message_t msg;
-
     if(session)
         miss_server_session_close(session);
 	ret = pthread_rwlock_wrlock(&info.lock);
@@ -1099,30 +1440,46 @@ int miss_session_del(miss_session_t *session)
     list_for_each(post, &(client_session.head)) {
         psession_node = list_entry(post, session_node_t, list);
         if(psession_node && psession_node->session == session) {
-        	if( psession_node->video_status == STREAM_START ) {
-        		psession_node->video_status == STREAM_NONE;
-        	    /********message body********/
-        		msg_init(&msg);
-        		msg.message = MSG_VIDEO_STOP;
-        		msg.sender = msg.receiver = SERVER_MISS;
-        		server_video_message(&msg);
-        		/****************************/
+        	if( psession_node->source == SOURCE_LIVE) {
+				if( psession_node->video_status == STREAM_START ) {
+					psession_node->video_status == STREAM_NONE;
+					/********message body********/
+					msg_init(&msg);
+					msg.message = MSG_VIDEO_STOP;
+					msg.sender = msg.receiver = SERVER_MISS;
+					server_video_message(&msg);
+					/****************************/
+				}
+				if( psession_node->audio_status == STREAM_START ) {
+					psession_node->audio_status == STREAM_NONE;
+					/********message body********/
+					msg_init(&msg);
+					msg.message = MSG_AUDIO_STOP;
+					msg.sender = msg.receiver = SERVER_MISS;
+					server_audio_message(&msg);
+					/****************************/
+				}
+				psession_node->source = SOURCE_NONE;
         	}
-        	if( psession_node->audio_status == STREAM_START ) {
-        		psession_node->audio_status == STREAM_NONE;
-        	    /********message body********/
-        		msg_init(&msg);
-        		msg.message = MSG_AUDIO_STOP;
-        		msg.sender = msg.receiver = SERVER_MISS;
-        		server_audio_message(&msg);
-        		/****************************/
+        	else if( psession_node->source == SOURCE_PLAYER ) {
+				if( psession_node->video_status == STREAM_START ||
+					psession_node->audio_status == STREAM_START	) {
+					psession_node->video_status == STREAM_NONE;
+					psession_node->audio_status == STREAM_NONE;
+					/********message body********/
+					msg_init(&msg);
+					msg.message = MSG_PLAYER_STOP;
+					msg.sender = msg.receiver = SERVER_MISS;
+					server_player_message(&msg);
+					/****************************/
+				}
+				psession_node->source = SOURCE_NONE;
         	}
             miss_list_del(&(psession_node->list));
             free(psession_node);
             ret = 0;
             break;
         }
-
     }
     client_session.use_session_num --;
     ret = pthread_rwlock_unlock(&info.lock);
@@ -1165,7 +1522,6 @@ int miss_session_close_all(void)
 	}
 	return 0;
 }
-
 
 /*
  * external interface

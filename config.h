@@ -15,8 +15,9 @@
 /*
  * define
  */
-#define		CONFIG_MISS_MODULE_NUM 		1
+#define		CONFIG_MISS_MODULE_NUM 		2
 #define		CONFIG_MISS_PROFILE			0
+#define		CONFIG_MISS_DEVICE			1
 
 #define 	CONFIG_MISS_LOG_PATH				"/mnt/nfs/log/miss.log"
 #define 	CONFIG_MISS_PROFILE_PATH			"/opt/qcy/config/miss_profile.config"
@@ -27,10 +28,12 @@
  * structure
  */
 typedef struct miss_profile_t {
+	int		board_type;
 	char 	did[MAX_SYSTEM_STRING_SIZE];
 	char 	key[MAX_SYSTEM_STRING_SIZE];
 	char 	mac[MAX_SYSTEM_STRING_SIZE];
 	char 	model[MAX_SYSTEM_STRING_SIZE];
+	char 	vendor[MAX_SYSTEM_STRING_SIZE];
 	char 	sdk_type[MAX_SYSTEM_STRING_SIZE];
 	char 	token[2*MAX_SYSTEM_STRING_SIZE];
 	int		max_session_num;

@@ -40,6 +40,13 @@
 #define		MISS_ASYN_SPEAKER_STOP		0x21
 #define		MISS_ASYN_SPEAKER_CTRL		0x22
 #define		MISS_ASYN_SPEAKER_FORMAT	0x23
+#define		MISS_ASYN_PLAYER_START		0x24
+#define		MISS_ASYN_PLAYER_STOP		0x25
+#define		MISS_ASYN_MOTOR_CTRL		0x26
+#define		MISS_INIT_CONDITION_NUM					3
+#define		MISS_INIT_CONDITION_CONFIG				0
+#define		MISS_INIT_CONDITION_MIIO_CONNECTED		1
+#define		MISS_INIT_CONDITION_MIIO_DID			2
 /*
  * structure
  */
@@ -55,6 +62,12 @@ typedef enum stream_status_t {
 	STREAM_STOP
 } stream_status_t;
 
+typedef enum stream_source_type_t {
+	SOURCE_NONE =  0,
+	SOURCE_LIVE,
+	SOURCE_PLAYER,
+} stream_source_type_t;
+
 typedef struct session_node_t{
     miss_session_t *session;
     int id;/*current session id*/
@@ -64,7 +77,9 @@ typedef struct session_node_t{
     stream_status_t	audio_status;
     int	video_channel;
     int audio_channel;
-    struct list_handle list;
+    struct list_handle 		list;
+    stream_source_type_t	source;
+    char	lock;
 }session_node_t;
 
 typedef struct {
@@ -97,7 +112,9 @@ int miss_cmd_speaker_start(int session_id, miss_session_t *session,char *param);
 int miss_cmd_speaker_stop(int session_id, miss_session_t *session,char *param);
 int miss_cmd_video_ctrl(int session_id, miss_session_t *session,char *param);
 int miss_cmd_audio_get_format(int session_id, miss_session_t *session,char *param);
-int miss_cmd_player_ctrl(int session_id, miss_session_t *session,char *param);
-int miss_cmd_player_set_speed(int session_id, miss_session_t *session,char *param);
+int miss_cmd_player_ctrl(int session_id, miss_session_t *session, char *param);
+int miss_cmd_player_set_speed(int session_id, miss_session_t *session, char *param);
+int miss_cmd_motor_ctrl(int session_id, miss_session_t *session,char *param);
+void* miss_get_context_from_id(int id);
 
 #endif /* SERVER_MISS_LOCAL_H_ */
