@@ -71,7 +71,7 @@ static void task_default(void);
 static void task_error(void);
 static int server_release(void);
 static int server_get_status(int type);
-static int server_set_status(int type, int st);
+static int server_set_status(int type, int st, int value);
 static void server_thread_termination(void);
 //specific
 static int miss_server_connect(void);
@@ -95,6 +95,59 @@ static int miss_message_callback(message_t *arg);
 /*
  * helper
  */
+static int send_message(int receiver, message_t *msg)
+{
+	int st = 0;
+	switch(receiver) {
+		case SERVER_DEVICE:
+			st = server_device_message(msg);
+			break;
+		case SERVER_KERNEL:
+	//		st = server_kernel_message(msg);
+			break;
+		case SERVER_REALTEK:
+			st = server_realtek_message(msg);
+			break;
+		case SERVER_MIIO:
+			st = server_miio_message(msg);
+			break;
+		case SERVER_MISS:
+			st = server_miss_message(msg);
+			break;
+		case SERVER_MICLOUD:
+	//		st = server_micloud_message(msg);
+			break;
+		case SERVER_VIDEO:
+			st = server_video_message(msg);
+			break;
+		case SERVER_AUDIO:
+			st = server_audio_message(msg);
+			break;
+		case SERVER_RECORDER:
+			st = server_recorder_message(msg);
+			break;
+		case SERVER_PLAYER:
+			st = server_player_message(msg);
+			break;
+		case SERVER_SPEAKER:
+			st = server_speaker_message(msg);
+			break;
+		case SERVER_VIDEO2:
+			st = server_video2_message(msg);
+			break;
+		case SERVER_SCANNER:
+//			st = server_scanner_message(msg);
+			break;
+		case SERVER_MANAGER:
+			st = manager_message(msg);
+			break;
+		default:
+			log_err("unknown message target! %d", receiver);
+			break;
+	}
+	return st;
+}
+
 static session_node_t *miss_session_check_node(miss_session_t *session)
 {
     //find session at list
@@ -130,7 +183,7 @@ static int miss_message_callback(message_t *arg)
 	int ret = 0;
 	int code;
 	char audio_format[16];
-	audio_iot_config_t config;
+	int temp;
 	pthread_t	stream_pid;
 	message_t	msg;
 	ret = pthread_rwlock_wrlock(&info.lock);
@@ -190,12 +243,12 @@ static int miss_message_callback(message_t *arg)
 			ret = miss_cmd_send(sid,MISS_CMD_STREAM_CTRL_RESP, (void*)&code, sizeof(int));
 			break;
 		case MISS_ASYN_AUDIO_FORMAT:
-			config = *((audio_iot_config_t*)(arg->arg) );
-			if( config.format == RTS_A_FMT_ALAW ) strcpy(audio_format, "g711a");
-			else if( config.format == RTS_A_FMT_ULAW ) strcpy(audio_format, "g711u");
-			else if( config.format == RTS_A_FMT_AUDIO ) strcpy(audio_format, "pcm");
-			else if( config.format == RTS_A_FMT_MP3 ) strcpy(audio_format, "mp3");
-			else if( config.format == RTS_A_FMT_AAC ) strcpy(audio_format, "aac");
+			temp = *((int*)arg->arg);
+			if( temp == RTS_A_FMT_ALAW ) strcpy(audio_format, "g711a");
+			else if( temp == RTS_A_FMT_ULAW ) strcpy(audio_format, "g711u");
+			else if( temp == RTS_A_FMT_AUDIO ) strcpy(audio_format, "pcm");
+			else if( temp == RTS_A_FMT_MP3 ) strcpy(audio_format, "mp3");
+			else if( temp == RTS_A_FMT_AAC ) strcpy(audio_format, "aac");
 			else strcpy(audio_format, "unknown");
 			if( arg->result == 0) code = MISS_NO_ERROR;
 			else code = MISS_ERR_CLIENT_NO_SUPPORT;
@@ -324,15 +377,17 @@ static void *session_stream_send_video_func(void *arg)
 	session_node_t *node=(session_node_t*)arg;
     int ret, ret1, channel,source;
     message_t	msg;
-
-    misc_set_bit(&info.thread_start, THREAD_VIDEO, 1);
+    signal(SIGINT, server_thread_termination);
+    signal(SIGTERM, server_thread_termination);
     misc_set_thread_name("miss_server_video_stream");
     channel = node->video_channel;
     source = node->source;
     pthread_detach(pthread_self());
-    msg_buffer_init(&video_buff, MSG_BUFFER_OVERFLOW_YES);
-    while( !server_get_status(STATUS_TYPE_EXIT)
-    		&& session_get_node_status(node,0) == STREAM_START ) {
+	if( !video_buff.init ) {
+		msg_buffer_init(&video_buff, MSG_BUFFER_OVERFLOW_YES);
+	}
+	server_set_status(STATUS_TYPE_THREAD_START, THREAD_VIDEO, 1);
+    while( !info.exit && session_get_node_status(node,0) == STREAM_START ) {
         //read video frame
     	ret = pthread_rwlock_wrlock(&video_buff.lock);
     	if(ret)	{
@@ -344,6 +399,7 @@ static void *session_stream_send_video_func(void *arg)
     	ret1 = pthread_rwlock_unlock(&video_buff.lock);
     	if (ret1) {
     		log_err("add message unlock fail, ret = %d\n", ret1);
+    		msg_free(&msg);
     		continue;
     	}
     	if( ret!=0 )
@@ -359,7 +415,7 @@ static void *session_stream_send_video_func(void *arg)
     }
     log_info("-----------thread exit: server_miss_vstream----------");
     msg_buffer_release(&video_buff);
-    misc_set_bit(&info.thread_start, THREAD_VIDEO, 0);
+    server_set_status(STATUS_TYPE_THREAD_START, THREAD_VIDEO, 0);
     pthread_exit(0);
 }
 
@@ -368,15 +424,17 @@ static void *session_stream_send_audio_func(void *arg)
 	session_node_t *node=(session_node_t*)arg;
     int ret, ret1, channel, source;
     message_t	msg;
-    misc_set_bit(&info.thread_start, THREAD_AUDIO, 1);
+    signal(SIGINT, server_thread_termination);
+    signal(SIGTERM, server_thread_termination);
     misc_set_thread_name("miss_server_audio_stream");
     channel = node->audio_channel;
     source = node->source;
     pthread_detach(pthread_self());
-    msg_buffer_init(&audio_buff, MSG_BUFFER_OVERFLOW_YES);
-
-    while( !server_get_status(STATUS_TYPE_EXIT)
-    		&& session_get_node_status(node,1) == STREAM_START ) {
+	if( !audio_buff.init ) {
+		msg_buffer_init(&audio_buff, MSG_BUFFER_OVERFLOW_YES);
+	}
+	server_set_status(STATUS_TYPE_THREAD_START, THREAD_AUDIO, 1);
+    while( !info.exit && session_get_node_status(node,1) == STREAM_START ) {
         //read
     	ret = pthread_rwlock_wrlock(&audio_buff.lock);
     	if(ret)	{
@@ -388,6 +446,7 @@ static void *session_stream_send_audio_func(void *arg)
     	ret1 = pthread_rwlock_unlock(&audio_buff.lock);
     	if (ret1) {
     		log_err("add message unlock fail, ret = %d\n", ret1);
+    		msg_free(&msg);
     		continue;
     	}
     	if( ret!=0 )
@@ -403,7 +462,7 @@ static void *session_stream_send_audio_func(void *arg)
     }
     log_info("-----------thread exit: server_miss_astream----------");
     msg_buffer_release(&audio_buff);
-    misc_set_bit(&info.thread_start, THREAD_AUDIO, 0);
+    server_set_status(STATUS_TYPE_THREAD_START, THREAD_AUDIO, 0);
     pthread_exit(0);
 }
 
@@ -516,7 +575,8 @@ static int miss_server_connect(void)
     strcpy(model, config.profile.model);
     strcpy(token, config.profile.token);
     strcpy(sdk, config.profile.sdk_type);
-
+    if(token[strlen((char*)token) - 1] == 0xa)
+    	token[strlen((char*)token) - 1] = 0;
 	server.max_session_num = config.profile.max_session_num;
 	server.max_video_recv_size = config.profile.max_video_recv_size;
 	server.max_audio_recv_size = config.profile.max_audio_recv_size;
@@ -584,6 +644,28 @@ static int miss_server_disconnect(void)
 	return 0;
 }
 
+static int server_set_status(int type, int st, int value)
+{
+	int ret=-1;
+	ret = pthread_rwlock_wrlock(&info.lock);
+	if(ret)	{
+		log_err("add lock fail, ret = %d", ret);
+		return ret;
+	}
+	if(type == STATUS_TYPE_STATUS)
+		info.status = st;
+	else if(type==STATUS_TYPE_EXIT)
+		info.exit = st;
+	else if(type==STATUS_TYPE_CONFIG)
+		config.status = st;
+	else if(type==STATUS_TYPE_THREAD_START)
+		misc_set_bit(&info.thread_start, st, value);
+	ret = pthread_rwlock_unlock(&info.lock);
+	if (ret)
+		log_err("add unlock fail, ret = %d", ret);
+	return ret;
+}
+
 static void server_thread_termination(void)
 {
 	message_t msg;
@@ -599,49 +681,14 @@ static int server_release(void)
 {
 	int ret = 0;
 	miss_server_disconnect();
+	miss_session_close_all();
 	msg_buffer_release(&message);
+	msg_free(&info.task.msg);
+	memset(&info,0,sizeof(server_info_t));
+	memset(&config,0,sizeof(miss_config_t));
+	memset(&client_session,0,sizeof(client_session));
+	memset(&player,0,sizeof(player_iot_config_t));
 	return ret;
-}
-
-static int server_set_status(int type, int st)
-{
-	int ret=-1;
-	ret = pthread_rwlock_wrlock(&info.lock);
-	if(ret)	{
-		log_err("add lock fail, ret = %d", ret);
-		return ret;
-	}
-	if(type == STATUS_TYPE_STATUS)
-		info.status = st;
-	else if(type==STATUS_TYPE_EXIT)
-		info.exit = st;
-	else if(type==STATUS_TYPE_CONFIG)
-		config.status = st;
-	ret = pthread_rwlock_unlock(&info.lock);
-	if (ret)
-		log_err("add unlock fail, ret = %d", ret);
-	return ret;
-}
-
-static int server_get_status(int type)
-{
-	int st;
-	int ret;
-	ret = pthread_rwlock_wrlock(&info.lock);
-	if(ret)	{
-		log_err("add lock fail, ret = %d", ret);
-		return ret;
-	}
-	if(type == STATUS_TYPE_STATUS)
-		st = info.status;
-	else if(type== STATUS_TYPE_EXIT)
-		st = info.exit;
-	else if(type==STATUS_TYPE_CONFIG)
-		st = config.status;
-	ret = pthread_rwlock_unlock(&info.lock);
-	if (ret)
-		log_err("add unlock fail, ret = %d", ret);
-	return st;
 }
 
 static int server_message_proc(void)
@@ -672,30 +719,22 @@ static int server_message_proc(void)
 	}
 	switch(msg.message){
 		case MSG_MANAGER_EXIT:
-			server_set_status(STATUS_TYPE_EXIT,1);
+			info.exit = 1;
 			break;
 		case MSG_MANAGER_TIMER_ACK:
 			((HANDLER)msg.arg_in.handler)();
 			break;
-		case MSG_MIIO_CLOUD_CONNECTED:
-			misc_set_bit( &info.thread_exit, MISS_INIT_CONDITION_MIIO_CONNECTED, 1);
-			break;
-		case MSG_MIIO_DID_ACUIRED:
-			strcpy( config.profile.did, (char*)(msg.arg));
-			misc_set_bit( &info.thread_exit, MISS_INIT_CONDITION_MIIO_DID, 1);
-			break;
 		case MSG_MIIO_MISSRPC_ERROR:
-			if( server_get_status(STATUS_TYPE_STATUS) == STATUS_RUN) {
-				server_set_status(STATUS_TYPE_STATUS, STATUS_ERROR );
+			if( info.status == STATUS_RUN) {
+				info.status = STATUS_ERROR;
 			}
 			break;
-		case MSG_VIDEO_GET_PARA_ACK:
-		case MSG_VIDEO_CTRL_ACK:
-		case MSG_VIDEO_CTRL_EXT_ACK:
-		case MSG_VIDEO_CTRL_DIRECT_ACK:
+		case MSG_VIDEO_PROPERTY_GET_ACK:
+		case MSG_VIDEO_PROPERTY_SET_ACK:
+		case MSG_VIDEO_PROPERTY_SET_EXT_ACK:
+		case MSG_VIDEO_PROPERTY_SET_DIRECT_ACK:
 		case MSG_VIDEO_START_ACK:
 		case MSG_VIDEO_STOP_ACK:
-		case MSG_AUDIO_GET_PARA_ACK:
 		case MSG_AUDIO_START_ACK:
 		case MSG_AUDIO_STOP_ACK:
 		case MSG_PLAYER_START_ACK:
@@ -705,19 +744,32 @@ static int server_message_proc(void)
 			break;
 		case MSG_MISS_RPC_SEND:
 			if( msg.arg_in.cat == -1 ) {
-				ret = miss_rpc_process(NULL, (char*)msg.arg, msg.arg_size);
+				ret = miss_rpc_process(NULL, (char*)msg.arg, msg.arg_size-1);
 			}
 			else {
 				msg_id = miss_get_context_from_id(msg.arg_in.cat);
 				if (NULL != msg_id) {
 					log_debug("miss_rpc_process id:%d\n",msg.arg_in.cat);
-					ret = miss_rpc_process(msg_id, (char*)msg.arg, msg.arg_size);
+					ret = miss_rpc_process(msg_id, (char*)msg.arg, msg.arg_size-1);
+					log_info("--------------- = %s, len = %d", (char*)msg.arg, msg.arg_size-1);
 				}
 			}
 			if (ret != MISS_NO_ERROR) {
 				log_err("miss_rpc_process err:%d\n",ret);
 		//		server_miss_message(MSG_MIIO_MISSRPC_ERROR,NULL);
 				ret = 0;
+			}
+			break;
+		case MSG_MIIO_PROPERTY_NOTIFY:
+		case MSG_MIIO_PROPERTY_GET_ACK:
+			if( msg.arg_in.cat == MIIO_PROPERTY_CLIENT_STATUS ) {
+				if( msg.arg_in.dog == STATE_CLOUD_CONNECTED )
+					misc_set_bit( &info.thread_exit, MISS_INIT_CONDITION_MIIO_CONNECTED, 1);
+			}
+			else if( msg.arg_in.cat == MIIO_PROPERTY_DID_STATUS ) {
+				if( msg.arg_in.dog == 1 )
+					strcpy( config.profile.did, (char*)(msg.arg));
+					misc_set_bit( &info.thread_exit, MISS_INIT_CONDITION_MIIO_DID, 1);
 			}
 			break;
 		default:
@@ -734,7 +786,7 @@ static int heart_beat_proc(void)
 	message_t msg;
 	long long int tick = 0;
 	tick = time_get_now_stamp();
-	if( (tick - info.tick) > 10 ) {
+	if( (tick - info.tick) > SERVER_HEARTBEAT_INTERVAL ) {
 		info.tick = tick;
 	    /********message body********/
 		msg_init(&msg);
@@ -760,10 +812,13 @@ static void task_error(void)
 			break;
 		case STATUS_NONE:
 			tick = time_get_now_stamp();
-			if( (tick - info.tick) > 5 ) {
+			if( (tick - info.tick) > SERVER_RESTART_PAUSE ) {
 				info.exit = 1;
 				info.tick = tick;
 			}
+			break;
+		default:
+			log_err("!!!!!!!unprocessed server status in task_error = %d", info.status);
 			break;
 	}
 	usleep(1000);
@@ -773,6 +828,7 @@ static void task_error(void)
 static void task_default(void)
 {
 	int ret = 0;
+	message_t msg;
 	switch( info.status ){
 		case STATUS_NONE:
 			if( !misc_get_bit( info.thread_exit, MISS_INIT_CONDITION_CONFIG ) ) {
@@ -785,13 +841,31 @@ static void task_default(void)
 					break;
 				}
 			}
+			if( !misc_get_bit( info.thread_exit, MISS_INIT_CONDITION_MIIO_CONNECTED ) ) {
+			    /********message body********/
+				msg_init(&msg);
+				msg.message = MSG_MIIO_PROPERTY_GET;
+				msg.sender = msg.receiver = SERVER_MISS;
+				msg.arg_in.cat = MIIO_PROPERTY_CLIENT_STATUS;
+				server_miio_message(&msg);
+				/****************************/
+			}
+			if( config.profile.board_type && !misc_get_bit( info.thread_exit, MISS_INIT_CONDITION_MIIO_DID ) ) {
+			    /********message body********/
+				msg_init(&msg);
+				msg.message = MSG_MIIO_PROPERTY_GET;
+				msg.sender = msg.receiver = SERVER_MISS;
+				msg.arg_in.cat = MIIO_PROPERTY_DID_STATUS;
+				server_miio_message(&msg);
+				/****************************/
+			}
 			int actual_init_num = MISS_INIT_CONDITION_NUM;
 			if( !config.profile.board_type )
 				actual_init_num--;
 			if( misc_full_bit( info.thread_exit, actual_init_num ) )
 				info.status = STATUS_WAIT;
 			else
-				usleep(100000);
+				sleep(1);
 			break;
 		case STATUS_WAIT:
 			info.status = STATUS_SETUP;
@@ -799,17 +873,17 @@ static void task_default(void)
 		case STATUS_SETUP:
 		    if(miss_server_connect() < 0) {
 		        log_err("create session server fail");
-		        server_set_status(STATUS_TYPE_STATUS, STATUS_ERROR);
+		        info.status = STATUS_ERROR;
 		        break;
 		    }
 		    log_info("create session server finished");
-		    server_set_status(STATUS_TYPE_STATUS, STATUS_IDLE);
+		    info.status = STATUS_IDLE;
 			break;
 		case STATUS_IDLE:
-			server_set_status(STATUS_TYPE_STATUS, STATUS_START);
+			info.status = STATUS_START;
 			break;
 		case STATUS_START:
-			server_set_status(STATUS_TYPE_STATUS, STATUS_RUN);
+			info.status = STATUS_RUN;
 			break;
 		case STATUS_RUN:
 			break;
@@ -819,6 +893,9 @@ static void task_default(void)
 			break;
 		case STATUS_ERROR:
 			info.task.func = task_error;
+			break;
+		default:
+			log_err("!!!!!!!unprocessed server status in task_default = %d", info.status);
 			break;
 	}
 	usleep(1000);
@@ -834,6 +911,9 @@ static void *server_func(void)
     signal(SIGTERM, server_thread_termination);
 	misc_set_thread_name("server_miss");
 	pthread_detach(pthread_self());
+	if( !message.init ) {
+		msg_buffer_init(&message, MSG_BUFFER_OVERFLOW_NO);
+	}
 	//default task
 	info.task.func = task_default;
 	info.task.start = STATUS_NONE;
@@ -841,7 +921,8 @@ static void *server_func(void)
 	while( !info.exit ) {
 		info.task.func();
 		server_message_proc();
-		heart_beat_proc();
+		if( info.status!=STATUS_ERROR )
+			heart_beat_proc();
 	}
 	if( info.exit ) {
 		while( info.thread_start ) {
@@ -1123,8 +1204,8 @@ int miss_cmd_video_ctrl(int session_id, miss_session_t *session,char *param)
     /********message body********/
 	message_t msg;
 	msg_init(&msg);
-	msg.message = MSG_VIDEO_CTRL;
-	msg.arg_in.cat = VIDEO_CTRL_QUALITY;
+	msg.message = MSG_VIDEO_PROPERTY_SET;
+	msg.arg_in.cat = VIDEO_PROPERTY_QUALITY;
 	msg.arg = &vq;
 	msg.arg_size = sizeof(vq);
 	msg.sender = msg.receiver = SERVER_MISS;
@@ -1210,11 +1291,12 @@ int miss_cmd_audio_get_format(int session_id, miss_session_t *session, char *par
     }
     /********message body********/
 	memset(&msg,0,sizeof(message_t));
-	msg.message = MSG_AUDIO_GET_PARA;
+	msg.message = MSG_AUDIO_PROPERTY_GET;
 	msg.sender = msg.receiver = SERVER_MISS;
 	msg.arg_pass.cat = MISS_ASYN_AUDIO_FORMAT;
 	msg.arg_pass.dog = session_id;
 	msg.arg_pass.handler = miss_message_callback;
+	msg.arg_in.cat = AUDIO_PROPERTY_FORMAT;
 	/****************************/
     if( server_audio_message(&msg)!=0 ) {
     	log_err("audio check message failed!");
@@ -1529,10 +1611,6 @@ int miss_session_close_all(void)
 int server_miss_start(void)
 {
 	int ret=-1;
-	msg_buffer_init(&message, MSG_BUFFER_OVERFLOW_NO);
-	pthread_rwlock_init(&info.lock, NULL);
-	pthread_rwlock_init(&video_buff.lock, NULL);
-	pthread_rwlock_init(&audio_buff.lock, NULL);
 	ret = pthread_create(&info.id, NULL, server_func, NULL);
 	if(ret != 0) {
 		log_err("miss server create error! ret = %d",ret);
@@ -1547,13 +1625,17 @@ int server_miss_start(void)
 int server_miss_message(message_t *msg)
 {
 	int ret=0,ret1;
+	if( !message.init ) {
+		log_err("miss server is not ready for message processing!");
+		return -1;
+	}
 	ret = pthread_rwlock_wrlock(&message.lock);
 	if(ret)	{
 		log_err("add message lock fail, ret = %d\n", ret);
 		return ret;
 	}
 	ret = msg_buffer_push(&message, msg);
-	log_info("push into the miss message queue: sender=%d, message=%d, ret=%d", msg->sender, msg->message, ret);
+	log_info("push into the miss message queue: sender=%d, message=%x, ret=%d", msg->sender, msg->message, ret);
 	if( ret!=0 )
 		log_err("message push in miss error =%d", ret);
 	ret1 = pthread_rwlock_unlock(&message.lock);
@@ -1565,6 +1647,10 @@ int server_miss_message(message_t *msg)
 int server_miss_video_message(message_t *msg)
 {
 	int ret=0,ret1;
+	if( !video_buff.init ) {
+		log_err("miss video is not ready for message processing!");
+		return -1;
+	}
 	ret = pthread_rwlock_wrlock(&video_buff.lock);
 	if(ret)	{
 		log_err("add message lock fail, ret = %d\n", ret);
@@ -1582,6 +1668,10 @@ int server_miss_video_message(message_t *msg)
 int server_miss_audio_message(message_t *msg)
 {
 	int ret=0,ret1=0;
+	if( !audio_buff.init ) {
+		log_err("miss audio is not ready for message processing!");
+		return -1;
+	}
 	ret = pthread_rwlock_wrlock(&audio_buff.lock);
 	if(ret)	{
 		log_err("add message lock fail, ret = %d\n", ret);

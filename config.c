@@ -250,7 +250,7 @@ int config_miss_set(int module, void *arg)
 		msg_init(&msg);
 		msg.message = MSG_MANAGER_TIMER_ADD;
 		msg.sender = SERVER_MISS;
-		msg.arg_in.cat = 60000;	//1min
+		msg.arg_in.cat = FILE_FLUSH_TIME;	//1min
 		msg.arg_in.dog = 0;
 		msg.arg_in.duck = 0;
 		msg.arg_in.handler = &miss_config_save;

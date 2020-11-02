@@ -193,7 +193,7 @@ int miss_statistics(miss_session_t *session, void *data, int len)
 	msg.extra = "_sync.camera_perf_data";
 	msg.extra_size = strlen(msg.extra) + 1;
 	/***************************/
-	server_miio_message(&msg);
+//	server_miio_message(&msg);
 }
 
 int miss_on_connect(miss_session_t *session, void **user_data)
