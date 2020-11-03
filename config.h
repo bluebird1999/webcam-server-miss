@@ -19,10 +19,10 @@
 #define		CONFIG_MISS_PROFILE			0
 #define		CONFIG_MISS_DEVICE			1
 
-#define 	CONFIG_MISS_LOG_PATH				"/mnt/nfs/log/miss.log"
-#define 	CONFIG_MISS_PROFILE_PATH			"/opt/qcy/config/miss_profile.config"
-#define		CONFIG_MISS_DEVICE_PATH				"/etc/miio/device.conf"
-#define		CONFIG_MISS_TOKEN_PATH				"/etc/miio/device.token"
+#define 	CONFIG_MISS_LOG_PATH				"log/miss.log"
+#define 	CONFIG_MISS_PROFILE_PATH			"config/miss_profile.config"
+#define		CONFIG_MISS_DEVICE_PATH				"device.conf"
+#define		CONFIG_MISS_TOKEN_PATH				"device.token"
 
 /*
  * structure
