@@ -190,9 +190,7 @@ static int miss_config_device_read(int board)
     		return -1;
     	}
     	fclose(fp);
-	    if(data[strlen((char*)data) - 1] == 0xa)
-            data[strlen((char*)data) - 1] = 0;
-		memcpy(miss_config.profile.token,data,fileSize);
+		memcpy(miss_config.profile.token,data,fileSize-1);
     	free(data);
     }
     else {

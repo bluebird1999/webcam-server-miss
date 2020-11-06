@@ -179,22 +179,22 @@ static miss_session_t *miss_session_get_node_id(int sid)
 
 static int miss_message_callback(message_t *arg)
 {
-	int ret = 0;
+	int ret = 0, ret1 = 0;
 	int code;
 	char audio_format[16];
 	int temp;
 	pthread_t	stream_pid;
 	message_t	msg;
-	ret = pthread_rwlock_wrlock(&info.lock);
-	if (ret) {
-		log_qcy(DEBUG_SERIOUS, "add session wrlock fail, ret = %d", ret);
-		return STREAM_NONE;
+	ret1 = pthread_rwlock_wrlock(&info.lock);
+	if (ret1) {
+		log_qcy(DEBUG_SERIOUS, "add session wrlock fail, ret = %d", ret1);
+		return ret1;
 	}
 	miss_session_t *sid = miss_session_get_node_id( arg->arg_pass.dog );
 	session_node_t *pnod = miss_session_check_node(sid);
 	if( sid == NULL || pnod == NULL ) {
-		log_qcy(DEBUG_SERIOUS, "session id %d isn't find!");
-		return -1;
+		log_qcy(DEBUG_SERIOUS, "session id %d isn't find!", arg->arg_pass.dog);
+		goto unlock;
 	}
 	switch( arg->arg_pass.cat) {
 		case MISS_ASYN_VIDEO_START:
@@ -305,7 +305,7 @@ static int miss_message_callback(message_t *arg)
 				pnod->audio_status = STREAM_NONE;
 				pnod->source = SOURCE_NONE;
 				pnod->lock = 0;
-				usleep(10000); //10ms
+				usleep(1000); //1ms
 				if( arg->arg_in.cat == 1) { //back to live
 				    /********message body********/
 					memset(&msg,0,sizeof(message_t));
@@ -340,8 +340,9 @@ static int miss_message_callback(message_t *arg)
 		case MISS_ASYN_SPEAKER_CTRL:
 			break;
 	}
-    ret = pthread_rwlock_unlock(&info.lock);
-	if (ret) {
+unlock:
+    ret1 = pthread_rwlock_unlock(&info.lock);
+	if (ret1) {
 		log_qcy(DEBUG_SERIOUS, "add session unlock fail, ret = %d", ret);
 	}
 	return ret;
@@ -376,11 +377,13 @@ static void *session_stream_send_video_func(void *arg)
 	session_node_t *node=(session_node_t*)arg;
     int ret, ret1, channel,source;
     message_t	msg;
+    char		fname[MAX_SYSTEM_STRING_SIZE];
     signal(SIGINT, server_thread_termination);
     signal(SIGTERM, server_thread_termination);
-    misc_set_thread_name("miss_server_video_stream");
     channel = node->video_channel;
     source = node->source;
+    sprintf(fname, "misv-%d-%d",channel, source);
+    misc_set_thread_name(fname);
     pthread_detach(pthread_self());
 	if( !video_buff.init ) {
 		msg_buffer_init(&video_buff, MSG_BUFFER_OVERFLOW_YES);
@@ -423,11 +426,13 @@ static void *session_stream_send_audio_func(void *arg)
 	session_node_t *node=(session_node_t*)arg;
     int ret, ret1, channel, source;
     message_t	msg;
+    char		fname[MAX_SYSTEM_STRING_SIZE];
     signal(SIGINT, server_thread_termination);
     signal(SIGTERM, server_thread_termination);
-    misc_set_thread_name("miss_server_audio_stream");
     channel = node->audio_channel;
     source = node->source;
+    sprintf(fname, "misa-%d-%d",channel, source);
+    misc_set_thread_name(fname);
     pthread_detach(pthread_self());
 	if( !audio_buff.init ) {
 		msg_buffer_init(&audio_buff, MSG_BUFFER_OVERFLOW_YES);
@@ -770,11 +775,13 @@ static int server_message_proc(void)
 			else if( msg.arg_in.cat == MIIO_PROPERTY_DID_STATUS ) {
 				if( msg.arg_in.dog == 1 )
 					strcpy( config.profile.did, (char*)(msg.arg));
-					misc_set_bit( &info.thread_exit, MISS_INIT_CONDITION_MIIO_DID, 1);
+					if(strlen(config.profile.did) > 1) {
+						misc_set_bit( &info.thread_exit, MISS_INIT_CONDITION_MIIO_DID, 1);
+					}
 			}
 			break;
 		default:
-			log_qcy(DEBUG_SERIOUS, "not processed message = %d", msg.message);
+			log_qcy(DEBUG_SERIOUS, "not processed message = %x", msg.message);
 			break;
 	}
 	msg_free(&msg);
@@ -1251,14 +1258,25 @@ int miss_cmd_motor_ctrl(int session_id, miss_session_t *session,char *param)
 		message_t msg;
 		msg_init(&msg);
 		if(  direction == 1 )
-			msg.message = DEVICE_CTRL_MOTOR_VER_UP;
+			msg.arg_in.cat = DEVICE_CTRL_MOTOR_VER_UP;
 		else if( direction == 2)
-			msg.message = DEVICE_CTRL_MOTOR_VER_DOWN;
+			msg.arg_in.cat = DEVICE_CTRL_MOTOR_VER_DOWN;
 		else if( direction == 3)
-			msg.message = DEVICE_CTRL_MOTOR_HOR_LEFT;
+			msg.arg_in.cat = DEVICE_CTRL_MOTOR_HOR_LEFT;
 		else if( direction == 6)
-			msg.message = DEVICE_CTRL_MOTOR_HOR_RIGHT;
+			msg.arg_in.cat = DEVICE_CTRL_MOTOR_HOR_RIGHT;
+		else if( direction == 4)
+			msg.arg_in.cat = DEVICE_CTRL_MOTOR_LEFT_UP;
+		else if( direction == 7)
+			msg.arg_in.cat = DEVICE_CTRL_MOTOR_RIGHT_UP;
+		else if( direction == 5)
+			msg.arg_in.cat = DEVICE_CTRL_MOTOR_LEFT_DOWN;
+		else if( direction == 8)
+			msg.arg_in.cat = DEVICE_CTRL_MOTOR_RIGHT_DOWN;
+		else if( direction == 10)
+			msg.arg_in.cat = DEVICE_CTRL_MOTOR_RESET;
 		msg.sender = msg.receiver = SERVER_MISS;
+		msg.message = MSG_DEVICE_CTRL_DIRECT;
 		msg.arg_in.cat = op;
 		msg.arg_pass.cat = MISS_ASYN_MOTOR_CTRL;
 		msg.arg_pass.dog = session_id;
@@ -1494,6 +1512,7 @@ int miss_session_add(miss_session_t *session)
     ret = pthread_rwlock_unlock(&info.lock);
 	if (ret) {
 		log_qcy(DEBUG_SERIOUS, "add session unlock fail, ret = %d", ret);
+		return -1;
 	}
 	log_qcy(DEBUG_SERIOUS, "[miss_session_add]miss:%d session_node->session:%d",session,session_node->session);
     return session_id;
@@ -1501,6 +1520,7 @@ SESSION_ADD_ERR:
     ret = pthread_rwlock_unlock(&info.lock);
 	if (ret) {
 		log_qcy(DEBUG_SERIOUS, "add session unlock fail, ret = %d", ret);
+		return -1;
 	}
     log_qcy(DEBUG_SERIOUS, "[miss_session_add]miss fail return MISS_ERR_MAX_SESSION");
 	return -1;
@@ -1618,7 +1638,7 @@ int server_miss_start(void)
 		 return ret;
 	 }
 	else {
-		log_qcy(DEBUG_SERIOUS, "miss server create successful!");
+		log_qcy(DEBUG_INFO, "miss server create successful!");
 		return 0;
 	}
 }
@@ -1627,7 +1647,7 @@ int server_miss_message(message_t *msg)
 {
 	int ret=0,ret1;
 	if( !message.init ) {
-		log_qcy(DEBUG_SERIOUS, "miss server is not ready for message processing!");
+		log_qcy(DEBUG_INFO, "miss server is not ready for message processing!");
 		return -1;
 	}
 	ret = pthread_rwlock_wrlock(&message.lock);
@@ -1636,10 +1656,10 @@ int server_miss_message(message_t *msg)
 		return ret;
 	}
 	ret = msg_buffer_push(&message, msg);
-	log_qcy(DEBUG_SERIOUS, "push into the miss message queue: sender=%d, message=%x, ret=%d, head=%d, tail=%d", msg->sender, msg->message, ret,
+	log_qcy(DEBUG_VERBOSE, "push into the miss message queue: sender=%d, message=%x, ret=%d, head=%d, tail=%d", msg->sender, msg->message, ret,
 			message.head, message.tail);
 	if( ret!=0 )
-		log_qcy(DEBUG_SERIOUS, "message push in miss error =%d", ret);
+		log_qcy(DEBUG_INFO, "message push in miss error =%d", ret);
 	ret1 = pthread_rwlock_unlock(&message.lock);
 	if (ret1)
 		log_qcy(DEBUG_SERIOUS, "add message unlock fail, ret = %d", ret1);
@@ -1650,7 +1670,7 @@ int server_miss_video_message(message_t *msg)
 {
 	int ret=0,ret1;
 	if( !video_buff.init ) {
-		log_qcy(DEBUG_SERIOUS, "miss video is not ready for message processing!");
+		log_qcy(DEBUG_INFO, "miss video is not ready for message processing!");
 		return -1;
 	}
 	ret = pthread_rwlock_wrlock(&video_buff.lock);
@@ -1660,7 +1680,7 @@ int server_miss_video_message(message_t *msg)
 	}
 	ret = msg_buffer_push(&video_buff, msg);
 	if( ret!=0 )
-		log_qcy(DEBUG_SERIOUS, "message push in miss error =%d", ret);
+		log_qcy(DEBUG_INFO, "message push in miss error =%d", ret);
 	ret1 = pthread_rwlock_unlock(&video_buff.lock);
 	if (ret1)
 		log_qcy(DEBUG_SERIOUS, "add message unlock fail, ret = %d", ret1);
@@ -1671,7 +1691,7 @@ int server_miss_audio_message(message_t *msg)
 {
 	int ret=0,ret1=0;
 	if( !audio_buff.init ) {
-		log_qcy(DEBUG_SERIOUS, "miss audio is not ready for message processing!");
+		log_qcy(DEBUG_INFO, "miss audio is not ready for message processing!");
 		return -1;
 	}
 	ret = pthread_rwlock_wrlock(&audio_buff.lock);
@@ -1681,7 +1701,7 @@ int server_miss_audio_message(message_t *msg)
 	}
 	ret = msg_buffer_push(&audio_buff, msg);
 	if( ret!=0 )
-		log_qcy(DEBUG_SERIOUS, "message push in miss error =%d", ret);
+		log_qcy(DEBUG_INFO, "message push in miss error =%d", ret);
 	ret1 = pthread_rwlock_unlock(&audio_buff.lock);
 	if (ret1)
 		log_qcy(DEBUG_SERIOUS, "add message unlock fail, ret = %d", ret1);
