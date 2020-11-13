@@ -51,6 +51,24 @@
 /*
  * structure
  */
+typedef struct miss_date_time_t {
+    unsigned long    dwYear;
+    unsigned long    dwMonth;
+    unsigned long    dwDay;
+    unsigned long    dwHour;
+    unsigned long    dwMinute;
+    unsigned long    dwSecond;
+} miss_date_time_t;
+
+typedef struct miss_playlist_t {
+	uint32_t       		recordType;
+	uint32_t	    	channel;
+	uint32_t       		deviceId;
+	miss_date_time_t	startTime;
+	miss_date_time_t	endTime;
+	uint32_t        	totalNum;
+} miss_playlist_t;
+
 typedef struct client_session_t{
 	int use_session_num;
 	int miss_server_init;

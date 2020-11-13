@@ -36,6 +36,7 @@
 #include "../../tools/tools_interface.h"
 #include "../../server/miio/miio_interface.h"
 #include "../../server/speaker/speaker_interface.h"
+#include "../../server/player/player_interface.h"
 //server header
 #include "miss.h"
 #include "miss_interface.h"
@@ -54,8 +55,6 @@ static int rdt_cmd_parse(char *buf, int len, miss_session_t *session, int enable
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  */
-
-
 /*
  * miss_porting helper function
  */
@@ -64,21 +63,24 @@ static int rdt_cmd_parse(char *buf, int len, miss_session_t *session, int enable
     int ret = 0;
 	char *msg = buf;
     unsigned int cmd_type;
-
+    message_t message;
     if (NULL == buf)
         return -1;
-
-    log_qcy(DEBUG_SERIOUS, "recv msg: %s\n",msg);
-
+    log_qcy(DEBUG_INFO, "recv msg: %s\n",msg);
 	ret = json_verify_get_int(msg, "cmdtype", (int *)&cmd_type);
 	if (ret < 0) {
 		log_info ("error param: cmdtype\n");
 		return -1;
 	}
-
     switch (cmd_type) {
         case GET_RECORD_FILE: {
- //         miss_playbackSearch_file(session);
+        	/******************************/
+        	msg_init(&message);
+        	message.message = MSG_PLAYER_GET_FILE_LIST;
+        	message.sender = message.receiver = SERVER_MISS;
+        	message.arg_pass.handler = session;
+        	server_player_message(&message);
+        	/******************************/
             break;
         }
         case GET_RECORD_PICTURE: {
@@ -143,12 +145,10 @@ int miss_rpc_send(void *rpc_id, const char *method, const char *params)
 		log_qcy(DEBUG_SERIOUS, "too much rpc msg processing!\n");
 		return -1;
 	}
-
 	if (miss_msg.msg_num >= MISS_MSG_MAX_NUM) {
 		log_qcy(DEBUG_SERIOUS, "no free msg id: %d!\n", miss_msg.msg_num);
 		return -1;
 	}
-
 	for (i = 0; i< MISS_MSG_MAX_NUM; i++) {
 		if (miss_msg.msg_id[i] == 0) {
 			miss_msg.msg_id[i] = msg_id;
@@ -199,24 +199,19 @@ int miss_on_connect(miss_session_t *session, void **user_data)
 {
     int session_id = 0;
     int *pSession_valu = NULL;
-
-    log_qcy(DEBUG_SERIOUS, "miss session connect session:%d \n",session);
+    log_qcy(DEBUG_INFO, "miss session connect session:%d \n",session);
     if(!session) {
         log_qcy(DEBUG_SERIOUS, "session is NULL return MISS_ERR_ABORTED\n");
         return MISS_ERR_ABORTED;
     }
-    log_qcy(DEBUG_SERIOUS, "[miss_cmd_add]miss:%d \n",session);
 	if((session_id = miss_session_add(session)) < 0) {
 		log_qcy(DEBUG_SERIOUS, "miss session not valid session id, return MISS_ERR_MAX_SESSION!\n");
         //miss_server_session_close(session);
 		return MISS_ERR_ABORTED;
 	}
-
-    log_qcy(DEBUG_SERIOUS, "miss session connect session:%d end\n",session);
     pSession_valu = malloc(sizeof(int));
     *pSession_valu = session_id;
     *user_data = pSession_valu;
-
 	return 0;
 }
 

@@ -177,6 +177,107 @@ static miss_session_t *miss_session_get_node_id(int sid)
     return NULL;
 }
 
+static int miss_rdt_send_msg(miss_session_t *session, void *msg, int len)
+{
+    int ret = 0;
+    const int max_payload_len = 2048;
+    int slicenum = 0;
+    int sliceseq = 1;
+    char* slice_buf = NULL;
+    int slice_size = 0;
+    if((len % max_payload_len) == 0) {
+        slicenum = len / max_payload_len;
+    }
+    else {
+        slicenum = len / max_payload_len + 1;
+    }
+
+    for(sliceseq = 1; sliceseq <= slicenum; sliceseq++) {
+        slice_buf = (char*)(msg + (sliceseq - 1) * max_payload_len);
+        slice_size = (sliceseq < slicenum) ? max_payload_len : (len - (sliceseq - 1) * max_payload_len);
+        ret = miss_rdt_send(session, (void *)slice_buf, slice_size);
+        if(ret == 0) {
+            //log_debug("Send file OK!\n");
+        }
+        else {
+            log_err("send file faild! ret = %d\n", ret);
+        }
+    }
+	return 0;
+}
+
+static int miss_get_player_list_ack(message_t *msg)
+{
+	int ret = 0, ret1 = 0;
+	int i;
+	int size = 0, len = 0;
+	miss_playlist_t *flist;
+	unsigned char *buff;
+	player_file_item_t *p;
+	struct tm  ts;
+	unsigned long long int start,end;
+	int cmdtype = GET_RECORD_FILE;
+	ret1 = pthread_rwlock_wrlock(&info.lock);
+	if (ret1) {
+		log_qcy(DEBUG_SERIOUS, "add session wrlock fail, ret = %d", ret1);
+		return ret1;
+	}
+	miss_session_t *sid = miss_session_get_node_id( (miss_session_t*)(msg->arg_pass.handler) );
+	session_node_t *pnod = miss_session_check_node(sid);
+	if( sid == NULL || pnod == NULL ) {
+		log_qcy(DEBUG_SERIOUS, "session id %d isn't find!", msg->arg_pass.handler);
+		goto unlock;
+	}
+	size = msg->arg_in.dog;
+	p = (player_file_item_t*)msg->arg;
+	flist = (miss_playlist_t *)calloc(size,sizeof(miss_playlist_t));
+	if(flist == NULL) {
+		log_qcy(DEBUG_SERIOUS, "Fail to calloc. size = %d", size);
+        goto unlock;
+	}
+	for (i = 0; i < size; i++) {
+		ts = *localtime(&(p->start));
+		flist[i].recordType = 0x04;
+		flist[i].channel    = msg->arg_in.duck;
+		flist[i].deviceId   = 0;
+		flist[i].startTime.dwYear   = ts.tm_year + 1900;
+		flist[i].startTime.dwMonth  = ts.tm_mon + 1;
+		flist[i].startTime.dwDay  	= ts.tm_mday;
+		flist[i].startTime.dwHour   = ts.tm_hour;
+		flist[i].startTime.dwMinute = ts.tm_min;
+		flist[i].startTime.dwSecond = ts.tm_sec;
+		ts = *localtime(&(p->stop));
+		flist[i].endTime.dwYear   	= ts.tm_year + 1900;
+		flist[i].endTime.dwMonth 	= ts.tm_mon + 1;
+		flist[i].endTime.dwDay  	= ts.tm_mday;
+		flist[i].endTime.dwHour   	= ts.tm_hour;
+		flist[i].endTime.dwMinute 	= ts.tm_min;
+		flist[i].endTime.dwSecond 	= ts.tm_sec;
+		flist[i].totalNum++;
+		p++;
+	}
+	len = sizeof(miss_playlist_t) * size;
+	buff = malloc(sizeof(cmdtype) + sizeof(size) + len);
+	if(!buff) {
+		free(flist);
+		log_qcy(DEBUG_SERIOUS, "Fail to calloc. size = %d", len);
+		goto unlock;
+	}
+	memset(buff, 0, sizeof(cmdtype) + sizeof(size) + len);
+	memcpy(buff, &cmdtype, sizeof(cmdtype));
+	memcpy(buff + sizeof(cmdtype), &size, sizeof(size));
+	memcpy(buff + sizeof(cmdtype) + sizeof(size), flist, len);
+	miss_rdt_send_msg(sid, buff, sizeof(cmdtype) + sizeof(size) + len);
+	free(flist);
+	free(buff);
+unlock:
+    ret1 = pthread_rwlock_unlock(&info.lock);
+	if (ret1) {
+		log_qcy(DEBUG_SERIOUS, "add session unlock fail, ret = %d", ret);
+	}
+	return ret;
+}
+
 static int miss_message_callback(message_t *arg)
 {
 	int ret = 0, ret1 = 0;
@@ -757,7 +858,7 @@ static int server_message_proc(void)
 				if (NULL != msg_id) {
 					log_debug("miss_rpc_process id:%d",msg.arg_in.cat);
 					ret = miss_rpc_process(msg_id, (char*)msg.arg, msg.arg_size-1);
-					log_qcy(DEBUG_SERIOUS, "--------------- = %s, len = %d", (char*)msg.arg, msg.arg_size-1);
+//					log_qcy(DEBUG_INFO, "--------------- = %s, len = %d", (char*)msg.arg, msg.arg_size-1);
 				}
 			}
 			if (ret != MISS_NO_ERROR) {
@@ -779,6 +880,10 @@ static int server_message_proc(void)
 						misc_set_bit( &info.thread_exit, MISS_INIT_CONDITION_MIIO_DID, 1);
 					}
 			}
+			break;
+		case MSG_PLAYER_GET_FILE_LIST_ACK:
+			if( !msg.result )
+				miss_get_player_list_ack(&msg);
 			break;
 		default:
 			log_qcy(DEBUG_SERIOUS, "not processed message = %x", msg.message);
