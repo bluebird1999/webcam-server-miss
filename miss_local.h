@@ -109,11 +109,11 @@ typedef struct {
 } miss_msg_t;
 
 enum cmdtype {
-		GET_RECORD_FILE = 1,
-//      GET_RECORD_TIMESTAMP,
-//      GET_FOREVER_TIMESTAMP = 4,
-		GET_RECORD_PICTURE = 5,
-		GET_RECORD_MSG = 6
+	GET_RECORD_FILE = 1,
+	GET_RECORD_TIMESTAMP = 2,
+	GET_RECORD_DATE = 3,
+	GET_RECORD_PICTURE = 5,
+	GET_RECORD_MSG = 6
 };
 
 /*

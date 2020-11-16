@@ -64,25 +64,52 @@ static int rdt_cmd_parse(char *buf, int len, miss_session_t *session, int enable
 	char *msg = buf;
     unsigned int cmd_type;
     message_t message;
+    char starttime[MAX_SYSTEM_STRING_SIZE];
+    char endtime[MAX_SYSTEM_STRING_SIZE];
+    memset(starttime, 0, sizeof(starttime));
+    memset(endtime, 0, sizeof(endtime));
     if (NULL == buf)
         return -1;
     log_qcy(DEBUG_INFO, "recv msg: %s\n",msg);
 	ret = json_verify_get_int(msg, "cmdtype", (int *)&cmd_type);
 	if (ret < 0) {
-		log_info ("error param: cmdtype\n");
+		log_qcy(DEBUG_WARNING, "error param: cmdtype\n");
 		return -1;
 	}
     switch (cmd_type) {
-        case GET_RECORD_FILE: {
+        case GET_RECORD_FILE:
+        case GET_RECORD_TIMESTAMP:
+            ret = json_verify_get_string(buf,"starttime",starttime,sizeof(starttime)-1);
+            if (ret < 0) {
+            	log_qcy(DEBUG_WARNING, "cmdtype 5 error param: starttime\n");
+                return -1;
+            }
+            ret = json_verify_get_string(buf,"endtime",endtime,sizeof(endtime)-1);
+            if (ret < 0) {
+            	log_qcy(DEBUG_WARNING,"cmdtype 5 error param: endtime\n");
+                return -1;
+            }
         	/******************************/
         	msg_init(&message);
         	message.message = MSG_PLAYER_GET_FILE_LIST;
         	message.sender = message.receiver = SERVER_MISS;
         	message.arg_pass.handler = session;
+        	message.arg_pass.cat = cmd_type;
+        	message.arg_in.cat = (unsigned int)time_date_to_stamp(starttime);// - _config_.timezone * 3600);
+        	message.arg_in.dog = (unsigned int)time_date_to_stamp(endtime);// - _config_.timezone * 3600);
         	server_player_message(&message);
         	/******************************/
             break;
-        }
+        case GET_RECORD_DATE:
+        	/******************************/
+        	msg_init(&message);
+        	message.message = MSG_PLAYER_GET_FILE_DATE;
+        	message.sender = message.receiver = SERVER_MISS;
+        	message.arg_pass.handler = session;
+        	message.arg_pass.cat = cmd_type;
+        	server_player_message(&message);
+        	/******************************/
+        	break;
         case GET_RECORD_PICTURE: {
             int ret = 0;
             unsigned int Num = 0;;
@@ -297,9 +324,9 @@ void miss_on_cmd(miss_session_t *session, miss_cmd_e cmd,
 		miss_cmd_video_stop(sessionnum, session, (char*)params);
 		break;
 	case MISS_CMD_AUDIO_START:
-/*		start = time_date_to_stamp("20201025153835");
+/*		start = time_date_to_stamp("20201025153835") - _config_.timezone * 3600;
 		printf("-------------------%d",start);
-		end =   time_date_to_stamp("20201025153855");
+		end =   time_date_to_stamp("20201025153855") - _config_.timezone * 3600;
 		printf("-------------------%d",end);
 		sprintf(test_player, "{\"starttime\":%ld,\"offset\":1,\"speed\":1,\"autoswitchtolive\":1,\"sessionid\":1,\"avchannelmerge\":1, \"endtime\":1603604395,\"op\":1}", start, end);
 		miss_cmd_player_ctrl(sessionnum, session, (char*)test_player);
@@ -308,8 +335,8 @@ void miss_on_cmd(miss_session_t *session, miss_cmd_e cmd,
 		break;
 	case MISS_CMD_AUDIO_STOP:
 /*
-		start = time_date_to_stamp("20201021200159");
-		end =   time_date_to_stamp("20201021201358");
+		start = time_date_to_stamp("20201021200159") - _config_.timezone * 3600;
+		end =   time_date_to_stamp("20201021201358") - _config_.timezone * 3600;
 		strcpy(test_player,"{\"starttime\":1583078400,\"offset\":1,\"speed\":1,\"autoswitchtolive\":1,\"sessionid\":1,\"avchannelmerge\":1,\"endtime\":1583251199,\"op\":0}");
 		miss_cmd_player_ctrl(sessionnum, session, (char*)test_player);
 */

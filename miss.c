@@ -206,17 +206,13 @@ static int miss_rdt_send_msg(miss_session_t *session, void *msg, int len)
 	return 0;
 }
 
-static int miss_get_player_list_ack(message_t *msg)
+static int miss_get_player_date_ack(message_t *msg)
 {
 	int ret = 0, ret1 = 0;
 	int i;
 	int size = 0, len = 0;
-	miss_playlist_t *flist;
 	unsigned char *buff;
-	player_file_item_t *p;
-	struct tm  ts;
-	unsigned long long int start,end;
-	int cmdtype = GET_RECORD_FILE;
+	int cmdtype;
 	ret1 = pthread_rwlock_wrlock(&info.lock);
 	if (ret1) {
 		log_qcy(DEBUG_SERIOUS, "add session wrlock fail, ret = %d", ret1);
@@ -228,48 +224,135 @@ static int miss_get_player_list_ack(message_t *msg)
 		log_qcy(DEBUG_SERIOUS, "session id %d isn't find!", msg->arg_pass.handler);
 		goto unlock;
 	}
-	size = msg->arg_in.dog;
-	p = (player_file_item_t*)msg->arg;
-	flist = (miss_playlist_t *)calloc(size,sizeof(miss_playlist_t));
-	if(flist == NULL) {
-		log_qcy(DEBUG_SERIOUS, "Fail to calloc. size = %d", size);
-        goto unlock;
-	}
-	for (i = 0; i < size; i++) {
-		ts = *localtime(&(p->start));
-		flist[i].recordType = 0x04;
-		flist[i].channel    = msg->arg_in.duck;
-		flist[i].deviceId   = 0;
-		flist[i].startTime.dwYear   = ts.tm_year + 1900;
-		flist[i].startTime.dwMonth  = ts.tm_mon + 1;
-		flist[i].startTime.dwDay  	= ts.tm_mday;
-		flist[i].startTime.dwHour   = ts.tm_hour;
-		flist[i].startTime.dwMinute = ts.tm_min;
-		flist[i].startTime.dwSecond = ts.tm_sec;
-		ts = *localtime(&(p->stop));
-		flist[i].endTime.dwYear   	= ts.tm_year + 1900;
-		flist[i].endTime.dwMonth 	= ts.tm_mon + 1;
-		flist[i].endTime.dwDay  	= ts.tm_mday;
-		flist[i].endTime.dwHour   	= ts.tm_hour;
-		flist[i].endTime.dwMinute 	= ts.tm_min;
-		flist[i].endTime.dwSecond 	= ts.tm_sec;
-		flist[i].totalNum++;
-		p++;
-	}
-	len = sizeof(miss_playlist_t) * size;
+	cmdtype = GET_RECORD_DATE;
+	size = msg->arg_in.cat;
+	len = sizeof(unsigned int) * size;
 	buff = malloc(sizeof(cmdtype) + sizeof(size) + len);
 	if(!buff) {
-		free(flist);
 		log_qcy(DEBUG_SERIOUS, "Fail to calloc. size = %d", len);
 		goto unlock;
 	}
 	memset(buff, 0, sizeof(cmdtype) + sizeof(size) + len);
 	memcpy(buff, &cmdtype, sizeof(cmdtype));
 	memcpy(buff + sizeof(cmdtype), &size, sizeof(size));
-	memcpy(buff + sizeof(cmdtype) + sizeof(size), flist, len);
+	memcpy(buff + sizeof(cmdtype) + sizeof(size), (unsigned int)msg->arg, len);
 	miss_rdt_send_msg(sid, buff, sizeof(cmdtype) + sizeof(size) + len);
-	free(flist);
 	free(buff);
+unlock:
+    ret1 = pthread_rwlock_unlock(&info.lock);
+	if (ret1) {
+		log_qcy(DEBUG_SERIOUS, "add session unlock fail, ret = %d", ret);
+	}
+	return ret;
+}
+
+static int miss_get_player_list_ack(message_t *msg)
+{
+	int ret = 0, ret1 = 0;
+	int i;
+	int size = 0, len = 0;
+	unsigned char *buff;
+	player_file_item_t *p;
+	struct tm  ts;
+	unsigned long long int start,end;
+	int cmdtype;
+	ret1 = pthread_rwlock_wrlock(&info.lock);
+	if (ret1) {
+		log_qcy(DEBUG_SERIOUS, "add session wrlock fail, ret = %d", ret1);
+		return ret1;
+	}
+	miss_session_t *sid = miss_session_get_node_id( (miss_session_t*)(msg->arg_pass.handler) );
+	session_node_t *pnod = miss_session_check_node(sid);
+	if( sid == NULL || pnod == NULL ) {
+		log_qcy(DEBUG_SERIOUS, "session id %d isn't find!", msg->arg_pass.handler);
+		goto unlock;
+	}
+	cmdtype = msg->arg_pass.cat;
+	size = msg->arg_in.dog;
+	p = (player_file_item_t*)msg->arg;
+	if( msg->arg_pass.cat == GET_RECORD_FILE) {
+		miss_playlist_t *flist;
+		flist = (miss_playlist_t *)calloc(size,sizeof(miss_playlist_t));
+		if(flist == NULL) {
+			log_qcy(DEBUG_SERIOUS, "Fail to calloc. size = %d", size*sizeof(miss_playlist_t));
+			goto unlock;
+		}
+		for (i = 0; i < size; i++) {
+			ts = *localtime(&(p->start));
+			flist[i].recordType = 0x04;
+			flist[i].channel    = msg->arg_in.duck;
+			flist[i].deviceId   = 0;
+			flist[i].startTime.dwYear   = ts.tm_year + 1900;
+			flist[i].startTime.dwMonth  = ts.tm_mon + 1;
+			flist[i].startTime.dwDay  	= ts.tm_mday;
+			flist[i].startTime.dwHour   = ts.tm_hour;
+			flist[i].startTime.dwMinute = ts.tm_min;
+			flist[i].startTime.dwSecond = ts.tm_sec;
+			ts = *localtime(&(p->stop));
+			flist[i].endTime.dwYear   	= ts.tm_year + 1900;
+			flist[i].endTime.dwMonth 	= ts.tm_mon + 1;
+			flist[i].endTime.dwDay  	= ts.tm_mday;
+			flist[i].endTime.dwHour   	= ts.tm_hour;
+			flist[i].endTime.dwMinute 	= ts.tm_min;
+			flist[i].endTime.dwSecond 	= ts.tm_sec;
+			flist[i].totalNum++;
+			p++;
+		}
+		len = sizeof(miss_playlist_t) * size;
+		buff = malloc(sizeof(cmdtype) + sizeof(size) + len);
+		if(!buff) {
+			free(flist);
+			log_qcy(DEBUG_SERIOUS, "Fail to calloc. size = %d", len);
+			goto unlock;
+		}
+		memset(buff, 0, sizeof(cmdtype) + sizeof(size) + len);
+		memcpy(buff, &cmdtype, sizeof(cmdtype));
+		memcpy(buff + sizeof(cmdtype), &size, sizeof(size));
+		memcpy(buff + sizeof(cmdtype) + sizeof(size), flist, len);
+		miss_rdt_send_msg(sid, buff, sizeof(cmdtype) + sizeof(size) + len);
+		free(flist);
+		free(buff);
+	}
+	else if( msg->arg_pass.cat == GET_RECORD_TIMESTAMP) {
+		player_file_item_ext_t *flist;
+		flist = (player_file_item_ext_t *)calloc(size,sizeof(player_file_item_ext_t));
+		if(flist == NULL) {
+			log_qcy(DEBUG_SERIOUS, "Fail to calloc. size = %d", size*sizeof(player_file_item_ext_t));
+			goto unlock;
+		}
+		for (i = 0; i < size; i++) {
+			flist[i].chn = msg->arg_in.duck;
+			ts = *localtime(&(p->start));
+			flist[i].node.start    = 	((ts.tm_year + 1900) * 1e+10) +
+										((ts.tm_mon + 1) * 1e+8) +
+										( ts.tm_mday  * 1e+6 ) +
+										( ts.tm_hour * 1e+4) +
+										( ts.tm_min * 1e+2) +
+										( ts.tm_sec );
+			ts = *localtime(&(p->stop));
+			flist[i].node.stop    = 	((ts.tm_year + 1900) * 1e+10) +
+										((ts.tm_mon + 1) * 1e+8) +
+										( ts.tm_mday  * 1e+6 ) +
+										( ts.tm_hour * 1e+4) +
+										( ts.tm_min * 1e+2) +
+										( ts.tm_sec );
+			p++;
+		}
+		len = sizeof(player_file_item_ext_t) * size;
+		buff = malloc(sizeof(cmdtype) + sizeof(size) + len);
+		if(!buff) {
+			free(flist);
+			log_qcy(DEBUG_SERIOUS, "Fail to calloc. size = %d", sizeof(cmdtype) + sizeof(size) + len);
+			goto unlock;
+		}
+		memset(buff, 0, sizeof(cmdtype) + sizeof(size) + len);
+		memcpy(buff, &cmdtype, sizeof(cmdtype));
+		memcpy(buff + sizeof(cmdtype), &size, sizeof(size));
+		memcpy(buff + sizeof(cmdtype) + sizeof(size), flist, len);
+		miss_rdt_send_msg(sid, buff, sizeof(cmdtype) + sizeof(size) + len);
+		free(flist);
+		free(buff);
+	}
 unlock:
     ret1 = pthread_rwlock_unlock(&info.lock);
 	if (ret1) {
@@ -882,8 +965,12 @@ static int server_message_proc(void)
 			}
 			break;
 		case MSG_PLAYER_GET_FILE_LIST_ACK:
-			if( !msg.result )
+			if( !msg.result	)
 				miss_get_player_list_ack(&msg);
+			break;
+		case MSG_PLAYER_GET_FILE_DATE_ACK:
+			if( !msg.result	)
+				miss_get_player_date_ack(&msg);
 			break;
 		default:
 			log_qcy(DEBUG_SERIOUS, "not processed message = %x", msg.message);
