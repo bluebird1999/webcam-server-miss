@@ -82,6 +82,30 @@ static int miss_config_save(void)
 	return ret;
 }
 
+int config_miss_update_token(miss_config_t* mconfig)
+{
+	int ret = 0;
+	ret = pthread_rwlock_wrlock(&lock);
+	if(ret)	{
+		log_qcy(DEBUG_SERIOUS, "add lock fail, ret = %d\n", ret);
+		return ret;
+	}
+
+	ret = miss_config_device_read(miss_config.profile.board_type);
+	if(!ret)
+		misc_set_bit(&miss_config.status, CONFIG_MISS_DEVICE,1);
+	else
+		misc_set_bit(&miss_config.status, CONFIG_MISS_DEVICE,0);
+
+	strncpy(mconfig->profile.token, miss_config.profile.token, strlen(miss_config.profile.token));
+
+	ret = pthread_rwlock_unlock(&lock);
+	if (ret)
+		log_qcy(DEBUG_SERIOUS, "add unlock fail, ret = %d\n", ret);
+
+	return ret;
+}
+
 static int miss_config_device_read(int board)
 {
 	FILE *fp = NULL;

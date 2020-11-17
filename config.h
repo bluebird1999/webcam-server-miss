@@ -55,7 +55,7 @@ typedef struct miss_config_t {
 int config_miss_read(miss_config_t*);
 int config_miss_set(int module, void *arg);
 int config_miss_get_config_status(int module);
-
+int config_miss_update_token(miss_config_t*);
 
 
 #endif /* SERVER_MISS_CONFIG_H_ */

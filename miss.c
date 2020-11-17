@@ -873,6 +873,7 @@ static int server_release(void)
 {
 	int ret = 0;
 	miss_server_disconnect();
+	sleep(1);
 //	miss_session_close_all();
 	msg_buffer_release(&message);
 	msg_free(&info.task.msg);
@@ -932,6 +933,7 @@ static int server_message_proc(void)
 		case MSG_PLAYER_START_ACK:
 		case MSG_PLAYER_STOP_ACK:
 		case MSG_PLAYER_PROPERTY_SET_ACK:
+		case MSG_SPEAKER_CTL_PLAY_ACK:
 			if( msg.arg_pass.handler != NULL)
 				( *( int(*)(message_t*) ) msg.arg_pass.handler ) (&msg);
 			break;
@@ -1075,13 +1077,16 @@ static void task_default(void)
 			info.status = STATUS_SETUP;
 			break;
 		case STATUS_SETUP:
-		    if(miss_server_connect() < 0) {
-		        log_qcy(DEBUG_SERIOUS, "create session server fail");
-		        info.status = STATUS_ERROR;
-		        break;
-		    }
-		    log_qcy(DEBUG_SERIOUS, "create session server finished");
-		    info.status = STATUS_IDLE;
+			if(!config_miss_update_token(&config))
+			{
+				if(miss_server_connect() < 0) {
+					log_qcy(DEBUG_SERIOUS, "create session server fail");
+					info.status = STATUS_ERROR;
+					break;
+				}
+				log_qcy(DEBUG_SERIOUS, "create session server finished");
+				info.status = STATUS_IDLE;
+			}
 			break;
 		case STATUS_IDLE:
 			info.status = STATUS_START;
@@ -1129,6 +1134,7 @@ static void *server_func(void)
 	}
 	if( info.exit ) {
 		while( info.thread_start ) {
+			log_qcy(DEBUG_INFO, "---------------locked miss---- %d", info.thread_start);
 		}
 	    /********message body********/
 		message_t msg;
@@ -1472,7 +1478,6 @@ int miss_cmd_motor_ctrl(int session_id, miss_session_t *session,char *param)
 			msg.arg_in.cat = DEVICE_CTRL_MOTOR_RESET;
 		msg.sender = msg.receiver = SERVER_MISS;
 		msg.message = MSG_DEVICE_CTRL_DIRECT;
-		msg.arg_in.cat = op;
 		msg.arg_pass.cat = MISS_ASYN_MOTOR_CTRL;
 		msg.arg_pass.dog = session_id;
 		msg.arg_pass.handler = miss_message_callback;
