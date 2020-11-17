@@ -218,9 +218,8 @@ static int miss_get_player_date_ack(message_t *msg)
 		log_qcy(DEBUG_SERIOUS, "add session wrlock fail, ret = %d", ret1);
 		return ret1;
 	}
-	miss_session_t *sid = miss_session_get_node_id( (miss_session_t*)(msg->arg_pass.handler) );
-	session_node_t *pnod = miss_session_check_node(sid);
-	if( sid == NULL || pnod == NULL ) {
+	miss_session_t *sid = (miss_session_t*)(msg->arg_pass.handler);
+	if( sid == NULL ) {
 		log_qcy(DEBUG_SERIOUS, "session id %d isn't find!", msg->arg_pass.handler);
 		goto unlock;
 	}
@@ -236,7 +235,7 @@ static int miss_get_player_date_ack(message_t *msg)
 	memcpy(buff, &cmdtype, sizeof(cmdtype));
 	memcpy(buff + sizeof(cmdtype), &size, sizeof(size));
 	memcpy(buff + sizeof(cmdtype) + sizeof(size), (unsigned int)msg->arg, len);
-	miss_rdt_send_msg(sid, buff, sizeof(cmdtype) + sizeof(size) + len);
+	miss_rdt_send_msg(sid,  buff, sizeof(cmdtype) + sizeof(size) + len);
 	free(buff);
 unlock:
     ret1 = pthread_rwlock_unlock(&info.lock);
@@ -261,9 +260,8 @@ static int miss_get_player_list_ack(message_t *msg)
 		log_qcy(DEBUG_SERIOUS, "add session wrlock fail, ret = %d", ret1);
 		return ret1;
 	}
-	miss_session_t *sid = miss_session_get_node_id( (miss_session_t*)(msg->arg_pass.handler) );
-	session_node_t *pnod = miss_session_check_node(sid);
-	if( sid == NULL || pnod == NULL ) {
+	miss_session_t *sid = (miss_session_t*)(msg->arg_pass.handler);
+	if( sid == NULL ) {
 		log_qcy(DEBUG_SERIOUS, "session id %d isn't find!", msg->arg_pass.handler);
 		goto unlock;
 	}
@@ -339,7 +337,8 @@ static int miss_get_player_list_ack(message_t *msg)
 			p++;
 		}
 		len = sizeof(player_file_item_ext_t) * size;
-		buff = malloc(sizeof(cmdtype) + sizeof(size) + len);
+		int truesize = len + sizeof(size);
+		buff = malloc(sizeof(cmdtype) + sizeof(len) + sizeof(size) + len);
 		if(!buff) {
 			free(flist);
 			log_qcy(DEBUG_SERIOUS, "Fail to calloc. size = %d", sizeof(cmdtype) + sizeof(size) + len);
@@ -347,9 +346,10 @@ static int miss_get_player_list_ack(message_t *msg)
 		}
 		memset(buff, 0, sizeof(cmdtype) + sizeof(size) + len);
 		memcpy(buff, &cmdtype, sizeof(cmdtype));
-		memcpy(buff + sizeof(cmdtype), &size, sizeof(size));
-		memcpy(buff + sizeof(cmdtype) + sizeof(size), flist, len);
-		miss_rdt_send_msg(sid, buff, sizeof(cmdtype) + sizeof(size) + len);
+		memcpy(buff + sizeof(cmdtype), &truesize, sizeof(truesize));
+		memcpy(buff + sizeof(cmdtype) + sizeof(truesize), &size, sizeof(size));
+		memcpy(buff + sizeof(cmdtype) + sizeof(truesize) + sizeof(size), flist, len);
+		miss_rdt_send_msg(sid, buff, sizeof(cmdtype) + sizeof(truesize) + sizeof(size) + len);
 		free(flist);
 		free(buff);
 	}
@@ -522,6 +522,8 @@ static int miss_message_callback(message_t *arg)
 			break;
 		case MISS_ASYN_SPEAKER_STOP:
 		case MISS_ASYN_SPEAKER_CTRL:
+			break;
+		case MISS_ASYN_PLAYER_SET:
 			break;
 	}
 unlock:
@@ -929,6 +931,7 @@ static int server_message_proc(void)
 		case MSG_AUDIO_STOP_ACK:
 		case MSG_PLAYER_START_ACK:
 		case MSG_PLAYER_STOP_ACK:
+		case MSG_PLAYER_PROPERTY_SET_ACK:
 			if( msg.arg_pass.handler != NULL)
 				( *( int(*)(message_t*) ) msg.arg_pass.handler ) (&msg);
 			break;
@@ -1532,9 +1535,7 @@ int miss_cmd_player_ctrl(int session_id, miss_session_t *session, char *param)
 	unsigned int speed = 1;
 	unsigned int avchannelmerge = 0;
 	char *msg = param;
-	int op;
 	message_t	message;
-
 	log_qcy(DEBUG_INFO,"Receive a msg: %s", msg);
 	ret = json_verify_get_int(msg, "sessionid", (int *)&id);
 	if (ret < 0) {
@@ -1577,14 +1578,6 @@ int miss_cmd_player_ctrl(int session_id, miss_session_t *session, char *param)
 	} else {
 		avchannelmerge = 1;
 	}
-	/*
-	ret = json_verify_get_int(msg, "op", (int *)&op);
-	if (ret < 0) {
-		op = 0;
-	} else {
-		op = 1;
-	}
-	*/
 	ret = pthread_rwlock_wrlock(&info.lock);
 	if (ret) {
 		log_qcy(DEBUG_SERIOUS, "add session wrlock fail, ret = %d", ret);
@@ -1664,11 +1657,39 @@ int miss_cmd_player_ctrl(int session_id, miss_session_t *session, char *param)
 int miss_cmd_player_set_speed(int session_id, miss_session_t *session, char *param)
 {
     int ret;
+    message_t msg;
+    int	speed;
 	ret = pthread_rwlock_wrlock(&info.lock);
 	if (ret) {
 		log_qcy(DEBUG_SERIOUS, "add session wrlock fail, ret = %d", ret);
 		return -1;
 	}
+	ret = json_verify_get_int(param, "speed", (int *)&speed);
+	if (ret < 0) {
+		speed = 1;
+	} else {
+		if (speed != 1 && speed != 4 && speed != 16) {
+			log_qcy(DEBUG_WARNING, "speed can only be 1/4/16 for now");
+				return -1;
+		}
+	}
+    /********message body********/
+	msg_init(&msg);
+	msg.message = MSG_PLAYER_PROPERTY_SET;
+	msg.sender = msg.receiver = SERVER_MISS;
+	msg.arg_pass.cat = MISS_ASYN_PLAYER_SET;
+	msg.arg_pass.dog = session_id;
+	msg.arg_pass.duck = PLAYER_PROPERTY_SPEED;
+	msg.arg_pass.handler = miss_message_callback;
+	msg.arg_in.cat = PLAYER_PROPERTY_SPEED;
+	msg.arg = &speed;
+	msg.arg_size = sizeof(int);
+	/****************************/
+    if( server_player_message(&msg)!=0 ) {
+    	log_qcy(DEBUG_SERIOUS, "player check message failed!");
+    	ret = pthread_rwlock_unlock(&info.lock);
+    	return -1;
+    }
     ret = pthread_rwlock_unlock(&info.lock);
 	if (ret) {
 		log_qcy(DEBUG_SERIOUS, "add session unlock fail, ret = %d", ret);
