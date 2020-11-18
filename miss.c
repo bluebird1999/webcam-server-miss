@@ -834,6 +834,7 @@ static int miss_server_disconnect(void)
 		return -1;
 	}
 	miss_server_finish();
+	miss_set_ready(0);
 	log_qcy(DEBUG_INFO, "----miss_server disconnected!");
 	return 0;
 }
@@ -1002,6 +1003,7 @@ static int server_message_proc(void)
 			break;
 		case MSG_MISS_RPC_SEND:
 			ret1 = 0;
+			log_qcy(DEBUG_VERBOSE, " MSG_MISS_RPC_SEND = %s", (char*)msg.arg);
 			if( msg.arg_in.cat == -1 ) {
 				ret1 = miss_rpc_process(NULL, (char*)msg.arg, msg.arg_size-1);
 			}
@@ -1009,15 +1011,15 @@ static int server_message_proc(void)
 			    ret = strstr((char*)msg.arg,"error");
 			    if (ret != NULL ) {
 			    	if( strstr( (char*)msg.arg, "token mismatch") != NULL ) {
-			    		if( client_session.miss_server_init == 1 ) {
+			    		if( client_session.miss_server_ready == 0 ) {
 			    			config_miss_update_token(&config);
 			    			info.status = STATUS_RESTART;
 			    			log_qcy(DEBUG_INFO, "-------token mismatch found, restart miss server");
 			    		}
 			    	}
 			    	else if( strstr( (char*)msg.arg, "offline") != NULL ) {
-			    		if( client_session.miss_server_init == 0 ) {
-			    			info.status = STATUS_WAIT;
+			    		if( client_session.miss_server_ready == 0 ) {
+			    			info.status = STATUS_RESTART;
 			    			log_qcy(DEBUG_INFO, "-------offline found, try to start miss server");
 			    		}
 			    	}
@@ -1181,7 +1183,7 @@ static void task_default(void)
 			break;
 		case STATUS_RESTART:
 			miss_server_disconnect();
-			sleep(1);
+			sleep(3);
 			info.status = STATUS_WAIT;
 			break;
 		case STATUS_ERROR:
@@ -1851,6 +1853,22 @@ int miss_session_del(miss_session_t *session)
             break;
         }
     }
+    ret = pthread_rwlock_unlock(&info.lock);
+	if (ret) {
+		log_qcy(DEBUG_SERIOUS, "add session unlock fail, ret = %d", ret);
+	}
+    return ret;
+}
+
+int miss_set_ready(int st)
+{
+    int ret = -1;
+	ret = pthread_rwlock_wrlock(&info.lock);
+	if (ret) {
+		log_qcy(DEBUG_SERIOUS, "add session wrlock fail, ret = %d", ret);
+		return -1;
+	}
+	client_session.miss_server_ready = st;
     ret = pthread_rwlock_unlock(&info.lock);
 	if (ret) {
 		log_qcy(DEBUG_SERIOUS, "add session unlock fail, ret = %d", ret);

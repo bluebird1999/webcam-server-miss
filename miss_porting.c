@@ -310,6 +310,7 @@ void miss_on_rdt_data(miss_session_t *session, void *rdt_data, uint32_t length, 
 int miss_on_server_ready()
 {
 	log_qcy(DEBUG_INFO, "------miss on server ready message------------");
+	miss_set_ready(1);
 	return 0;
 }
 

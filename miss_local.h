@@ -73,6 +73,7 @@ typedef struct miss_playlist_t {
 typedef struct client_session_t{
 	int use_session_num;
 	int miss_server_init;
+	int miss_server_ready;
     struct list_handle head;
 }client_session_t;
 
@@ -136,5 +137,6 @@ int miss_cmd_player_ctrl(int session_id, miss_session_t *session, char *param);
 int miss_cmd_player_set_speed(int session_id, miss_session_t *session, char *param);
 int miss_cmd_motor_ctrl(int session_id, miss_session_t *session,char *param);
 void* miss_get_context_from_id(int id);
+int miss_set_ready(int st);
 
 #endif /* SERVER_MISS_LOCAL_H_ */
