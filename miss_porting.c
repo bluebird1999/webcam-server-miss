@@ -196,8 +196,8 @@ int miss_rpc_send(void *rpc_id, const char *method, const char *params)
 	msg.arg_size = strlen(params)+1;
 	msg.extra = method;
 	msg.extra_size = strlen(method)+1;
-	log_qcy(DEBUG_SERIOUS, "---------params---%s---------", params);
-	log_qcy(DEBUG_SERIOUS, "---------method---%s---------", method);
+	log_qcy(DEBUG_VERBOSE, "---------miss rpc params---%s---------", params);
+	log_qcy(DEBUG_VERBOSE, "---------miss rpc method---%s---------", method);
 	/***************************/
 	server_miio_message(&msg);
 }
@@ -215,11 +215,12 @@ int miss_statistics(miss_session_t *session, void *data, int len)
 	msg.message = MSG_MIIO_RPC_REPORT_SEND;
 	msg.sender = SERVER_MISS;
 	msg.arg = data;
-	msg.arg_size = len;
+	msg.arg_size = len + 1;
 	msg.extra = "_sync.camera_perf_data";
 	msg.extra_size = strlen(msg.extra) + 1;
 	/***************************/
-//	server_miio_message(&msg);
+	log_qcy(DEBUG_VERBOSE, "---------miss report data---%s---------", data);
+	server_miio_message(&msg);
 }
 
 int miss_on_connect(miss_session_t *session, void **user_data)
@@ -257,11 +258,13 @@ int miss_on_error(miss_session_t *session, miss_error_e error, void *user_data)
 int miss_on_disconnect(miss_session_t *session, miss_error_e error, void *user_data)
 {
 	int session_id = -1;
+	log_qcy(DEBUG_INFO, "miss server on disconnection, error=%d\n", error);
     if(!session) {
         log_qcy(DEBUG_SERIOUS, "session add:%p, user_data:%p return MISS_ERR_ABORTED\n", session, user_data);
         return MISS_ERR_ABORTED;
     }
-    miss_session_del(session);
+    if( error != MISS_ERR_CLOSE_BY_LOCAL)
+    	miss_session_del(session);
     if(user_data) {
 		session_id = *(int*)(user_data);
 	    free(user_data);
@@ -306,6 +309,7 @@ void miss_on_rdt_data(miss_session_t *session, void *rdt_data, uint32_t length, 
 
 int miss_on_server_ready()
 {
+	log_qcy(DEBUG_INFO, "------miss on server ready message------------");
 	return 0;
 }
 

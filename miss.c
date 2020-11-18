@@ -68,8 +68,8 @@ static void *server_func(void);
 static int server_message_proc(void);
 static void task_default(void);
 static void task_error(void);
-static int server_release(void);
-static int server_get_status(int type);
+static int server_release_1(void);
+static int server_release_2(void);
 static int server_set_status(int type, int st, int value);
 static void server_thread_termination(void);
 //specific
@@ -83,6 +83,7 @@ static miss_session_t *miss_session_get_node_id(int sid);
 static void *session_stream_send_audio_func(void *arg);
 static void *session_stream_send_video_func(void *arg);
 static int miss_message_callback(message_t *arg);
+static int miss_clean_stream(session_node_t *psession_node);
 
 /*
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -601,9 +602,9 @@ static void *session_stream_send_video_func(void *arg)
         }
         msg_free(&msg);
     }
-    log_qcy(DEBUG_SERIOUS, "-----------thread exit: server_miss_vstream----------");
     msg_buffer_release(&video_buff);
     server_set_status(STATUS_TYPE_THREAD_START, THREAD_VIDEO, 0);
+    log_qcy(DEBUG_INFO, "-----------thread exit: server_miss_vstream----------");
     pthread_exit(0);
 }
 
@@ -650,9 +651,9 @@ static void *session_stream_send_audio_func(void *arg)
         }
         msg_free(&msg);
     }
-    log_qcy(DEBUG_SERIOUS, "-----------thread exit: server_miss_astream----------");
     msg_buffer_release(&audio_buff);
     server_set_status(STATUS_TYPE_THREAD_START, THREAD_AUDIO, 0);
+    log_qcy(DEBUG_INFO, "-----------thread exit: server_miss_astream----------");
     pthread_exit(0);
 }
 
@@ -686,7 +687,7 @@ static int session_send_video_stream(int chn_id, message_t *msg)
             //send stream to miss
             ret = miss_video_send(psession_node->session, &frame_info, p);
             if (0 != ret) {
-                log_qcy(DEBUG_SERIOUS, "=====>>>>>>avSendFrameData Error: %d,session:%p, videoChn: %d, size: %d", ret,
+                log_qcy(DEBUG_WARNING, "=====>>>>>>avSendFrameData Error: %d,session:%p, videoChn: %d, size: %d", ret,
                     psession_node->session, chn_id, msg->extra_size);
             }
             else {
@@ -730,7 +731,7 @@ static int session_send_audio_stream(int chn_id, message_t *msg)
             //send stream to miss
             ret = miss_audio_send(psession_node->session, &frame_info, p);
             if (0 != ret) {
-                log_qcy(DEBUG_SERIOUS, "=====>>>>>>avSendFrameData Error: %d,session:%p, audioChn: %d, size: %d", ret,
+                log_qcy(DEBUG_WARNING, "=====>>>>>>avSendFrameData Error: %d,session:%p, audioChn: %d, size: %d", ret,
                     psession_node->session, chn_id, msg->extra_size);
             }
             else {
@@ -809,13 +810,11 @@ static int miss_server_disconnect(void)
 		return -1;
 	}
 	if(client_session.miss_server_init == 0) {
-		log_qcy(DEBUG_SERIOUS, "miss server miss_server_init is %d!", client_session.miss_server_init);
+		log_qcy(DEBUG_INFO, "miss server is already disconnected is %d!", client_session.miss_server_init);
 		ret = pthread_rwlock_unlock(&info.lock);
 		return 0;
 	}
 	client_session.miss_server_init = 0;
-	log_qcy(DEBUG_INFO, "miss_server_finish end");
-
     //free session list
     struct list_handle *post;
     session_node_t *psession_node = NULL;
@@ -823,17 +822,62 @@ static int miss_server_disconnect(void)
         psession_node = list_entry(post, session_node_t, list);
         if(psession_node && psession_node->session) {
             miss_server_session_close(psession_node->session);
-	        miss_list_del(&(psession_node->list));
-	        free(psession_node);
+            miss_clean_stream(psession_node);
+//          miss_list_del(&(psession_node->list));
+            free(psession_node);
+            client_session.use_session_num --;
         }
     }
-	miss_server_finish();
 	ret = pthread_rwlock_unlock(&info.lock);
 	if (ret) {
 		log_qcy(DEBUG_SERIOUS, "add miss server wrlock fail, ret = %d", ret);
 		return -1;
 	}
+	miss_server_finish();
+	log_qcy(DEBUG_INFO, "----miss_server disconnected!");
 	return 0;
+}
+
+static int miss_clean_stream(session_node_t *psession_node)
+{
+	int ret = 0;
+	message_t msg;
+	if( psession_node->source == SOURCE_LIVE) {
+		if( psession_node->video_status == STREAM_START ) {
+			psession_node->video_status == STREAM_NONE;
+			/********message body********/
+			msg_init(&msg);
+			msg.message = MSG_VIDEO_STOP;
+			msg.sender = msg.receiver = SERVER_MISS;
+			server_video_message(&msg);
+			/****************************/
+		}
+		if( psession_node->audio_status == STREAM_START ) {
+			psession_node->audio_status == STREAM_NONE;
+			/********message body********/
+			msg_init(&msg);
+			msg.message = MSG_AUDIO_STOP;
+			msg.sender = msg.receiver = SERVER_MISS;
+			server_audio_message(&msg);
+			/****************************/
+		}
+		psession_node->source = SOURCE_NONE;
+	}
+	else if( psession_node->source == SOURCE_PLAYER ) {
+		if( psession_node->video_status == STREAM_START ||
+			psession_node->audio_status == STREAM_START	) {
+			psession_node->video_status == STREAM_NONE;
+			psession_node->audio_status == STREAM_NONE;
+			/********message body********/
+			msg_init(&msg);
+			msg.message = MSG_PLAYER_STOP;
+			msg.sender = msg.receiver = SERVER_MISS;
+			server_player_message(&msg);
+			/****************************/
+		}
+		psession_node->source = SOURCE_NONE;
+	}
+	return ret;
 }
 
 static int server_set_status(int type, int st, int value)
@@ -867,14 +911,32 @@ static void server_thread_termination(void)
 	msg.sender = msg.receiver = SERVER_MISS;
 	/****************************/
 	manager_message(&msg);
+/*	info.exit = 1;
+	server_release_1();
+	while( info.thread_start ) {
+		log_qcy(DEBUG_INFO, "---------------locked miss---- %d", info.thread_start);
+	}
+	msg_init(&msg);
+	msg.message = MSG_MANAGER_EXIT_ACK;
+	msg.sender = SERVER_MISS;
+	manager_message(&msg);
+	server_release_2();
+	log_qcy(DEBUG_SERIOUS, "-----------thread exit: server_miss-----------");
+	pthread_exit(0);
+	*/
 }
 
-static int server_release(void)
+static int server_release_1(void)
 {
 	int ret = 0;
 	miss_server_disconnect();
-	sleep(1);
-//	miss_session_close_all();
+	usleep(1000*100);
+	return ret;
+}
+
+static int server_release_2(void)
+{
+	int ret = 0;
 	msg_buffer_release(&message);
 	msg_free(&info.task.msg);
 	memset(&info,0,sizeof(server_info_t));
@@ -890,6 +952,7 @@ static int server_message_proc(void)
 	message_t msg;
 	message_t send_msg;
 	void *msg_id = NULL;
+	char err[256];
 	msg_init(&msg);
 	msg_init(&send_msg);
 	int st;
@@ -938,21 +1001,42 @@ static int server_message_proc(void)
 				( *( int(*)(message_t*) ) msg.arg_pass.handler ) (&msg);
 			break;
 		case MSG_MISS_RPC_SEND:
+			ret1 = 0;
 			if( msg.arg_in.cat == -1 ) {
-				ret = miss_rpc_process(NULL, (char*)msg.arg, msg.arg_size-1);
+				ret1 = miss_rpc_process(NULL, (char*)msg.arg, msg.arg_size-1);
 			}
 			else {
-				msg_id = miss_get_context_from_id(msg.arg_in.cat);
-				if (NULL != msg_id) {
-					log_debug("miss_rpc_process id:%d",msg.arg_in.cat);
-					ret = miss_rpc_process(msg_id, (char*)msg.arg, msg.arg_size-1);
-//					log_qcy(DEBUG_INFO, "--------------- = %s, len = %d", (char*)msg.arg, msg.arg_size-1);
-				}
+			    ret = strstr((char*)msg.arg,"error");
+			    if (ret != NULL ) {
+			    	if( strstr( (char*)msg.arg, "token mismatch") != NULL ) {
+			    		if( client_session.miss_server_init == 1 ) {
+			    			config_miss_update_token(&config);
+			    			info.status = STATUS_RESTART;
+			    			log_qcy(DEBUG_INFO, "-------token mismatch found, restart miss server");
+			    		}
+			    	}
+			    	else if( strstr( (char*)msg.arg, "offline") != NULL ) {
+			    		if( client_session.miss_server_init == 0 ) {
+			    			info.status = STATUS_WAIT;
+			    			log_qcy(DEBUG_INFO, "-------offline found, try to start miss server");
+			    		}
+			    	}
+		    		else {
+//		    			log_qcy(DEBUG_INFO, "-------error message found, error = %s", err);
+		    		}
+			    }
+			    else {
+					msg_id = miss_get_context_from_id(msg.arg_in.cat);
+					if (NULL != msg_id) {
+						log_qcy(DEBUG_INFO, "miss_rpc_process id:%d", msg.arg_in.cat);
+						ret1 = miss_rpc_process(msg_id, (char*)msg.arg, msg.arg_size-1);
+						log_qcy(DEBUG_VERBOSE, "--------------- = %s, len = %d", (char*)msg.arg, msg.arg_size-1);
+					}
+			    }
 			}
-			if (ret != MISS_NO_ERROR) {
+			if (ret1 != MISS_NO_ERROR) {
 				log_qcy(DEBUG_SERIOUS, "miss_rpc_process err:%d",ret);
-		//		server_miss_message(MSG_MIIO_MISSRPC_ERROR,NULL);
-				ret = 0;
+				ret1 = 0;
 			}
 			break;
 		case MSG_MIIO_PROPERTY_NOTIFY:
@@ -1077,16 +1161,13 @@ static void task_default(void)
 			info.status = STATUS_SETUP;
 			break;
 		case STATUS_SETUP:
-			if(!config_miss_update_token(&config))
-			{
-				if(miss_server_connect() < 0) {
-					log_qcy(DEBUG_SERIOUS, "create session server fail");
-					info.status = STATUS_ERROR;
-					break;
-				}
-				log_qcy(DEBUG_SERIOUS, "create session server finished");
-				info.status = STATUS_IDLE;
+			if(miss_server_connect() < 0) {
+				log_qcy(DEBUG_SERIOUS, "create miss sdk server fail");
+				info.status = STATUS_ERROR;
+				break;
 			}
+			log_qcy(DEBUG_INFO, "create miss sdk server finished");
+			info.status = STATUS_IDLE;
 			break;
 		case STATUS_IDLE:
 			info.status = STATUS_START;
@@ -1099,6 +1180,9 @@ static void task_default(void)
 		case STATUS_STOP:
 			break;
 		case STATUS_RESTART:
+			miss_server_disconnect();
+			sleep(1);
+			info.status = STATUS_WAIT;
 			break;
 		case STATUS_ERROR:
 			info.task.func = task_error;
@@ -1132,6 +1216,7 @@ static void *server_func(void)
 		server_message_proc();
 		heart_beat_proc();
 	}
+	server_release_1();
 	if( info.exit ) {
 		while( info.thread_start ) {
 			log_qcy(DEBUG_INFO, "---------------locked miss---- %d", info.thread_start);
@@ -1144,7 +1229,7 @@ static void *server_func(void)
 		manager_message(&msg);
 		/***************************/
 	}
-	server_release();
+	server_release_2();
 	log_qcy(DEBUG_SERIOUS, "-----------thread exit: server_miss-----------");
 	pthread_exit(0);
 }
@@ -1713,7 +1798,7 @@ int miss_session_add(miss_session_t *session)
 		return -1;
 	}
     if(client_session.use_session_num >= MAX_CLIENT_NUMBER) {
-    	log_qcy(DEBUG_SERIOUS, "use_session_num:%d max:%d!", client_session.use_session_num, MAX_CLIENT_NUMBER);
+    	log_qcy(DEBUG_WARNING, "use_session_num:%d max:%d!", client_session.use_session_num, MAX_CLIENT_NUMBER);
     	goto SESSION_ADD_ERR;
     }
     //maloc session at list and init it
@@ -1732,7 +1817,7 @@ int miss_session_add(miss_session_t *session)
 		log_qcy(DEBUG_SERIOUS, "add session unlock fail, ret = %d", ret);
 		return -1;
 	}
-	log_qcy(DEBUG_SERIOUS, "[miss_session_add]miss:%d session_node->session:%d",session,session_node->session);
+	log_qcy(DEBUG_INFO, "[miss_session_add]miss:%d session_node->session:%d",session,session_node->session);
     return session_id;
 SESSION_ADD_ERR:
     ret = pthread_rwlock_unlock(&info.lock);
@@ -1747,9 +1832,6 @@ SESSION_ADD_ERR:
 int miss_session_del(miss_session_t *session)
 {
     int ret = -1;
-    message_t msg;
-    if(session)
-        miss_server_session_close(session);
 	ret = pthread_rwlock_wrlock(&info.lock);
 	if (ret) {
 		log_qcy(DEBUG_SERIOUS, "add session wrlock fail, ret = %d", ret);
@@ -1761,87 +1843,19 @@ int miss_session_del(miss_session_t *session)
     list_for_each(post, &(client_session.head)) {
         psession_node = list_entry(post, session_node_t, list);
         if(psession_node && psession_node->session == session) {
-        	if( psession_node->source == SOURCE_LIVE) {
-				if( psession_node->video_status == STREAM_START ) {
-					psession_node->video_status == STREAM_NONE;
-					/********message body********/
-					msg_init(&msg);
-					msg.message = MSG_VIDEO_STOP;
-					msg.sender = msg.receiver = SERVER_MISS;
-					server_video_message(&msg);
-					/****************************/
-				}
-				if( psession_node->audio_status == STREAM_START ) {
-					psession_node->audio_status == STREAM_NONE;
-					/********message body********/
-					msg_init(&msg);
-					msg.message = MSG_AUDIO_STOP;
-					msg.sender = msg.receiver = SERVER_MISS;
-					server_audio_message(&msg);
-					/****************************/
-				}
-				psession_node->source = SOURCE_NONE;
-        	}
-        	else if( psession_node->source == SOURCE_PLAYER ) {
-				if( psession_node->video_status == STREAM_START ||
-					psession_node->audio_status == STREAM_START	) {
-					psession_node->video_status == STREAM_NONE;
-					psession_node->audio_status == STREAM_NONE;
-					/********message body********/
-					msg_init(&msg);
-					msg.message = MSG_PLAYER_STOP;
-					msg.sender = msg.receiver = SERVER_MISS;
-					server_player_message(&msg);
-					/****************************/
-				}
-				psession_node->source = SOURCE_NONE;
-        	}
+        	miss_clean_stream(psession_node);
             miss_list_del(&(psession_node->list));
             free(psession_node);
+            client_session.use_session_num --;
             ret = 0;
             break;
         }
     }
-    client_session.use_session_num --;
     ret = pthread_rwlock_unlock(&info.lock);
 	if (ret) {
 		log_qcy(DEBUG_SERIOUS, "add session unlock fail, ret = %d", ret);
 	}
-	return ret;
-}
-
-int miss_session_close_all(void)
-{
-    int ret = MISS_NO_ERROR;
-	ret = pthread_rwlock_wrlock(&info.lock);
-	if (ret) {
-		log_qcy(DEBUG_SERIOUS, "add session wrlock fail, ret = %d", ret);
-		return -1;
-	}
-	log_qcy(DEBUG_SERIOUS, "miss server close all start! ");
-	//close and del all session
-	struct list_handle *post = NULL;
-	session_node_t *psession_node = NULL;
-	list_for_each(post, &(client_session.head)) {
-		log_qcy(DEBUG_SERIOUS, "miss server free session start! ");
-		psession_node = list_entry(post, session_node_t, list);
-		if(psession_node) {
-			log_qcy(DEBUG_SERIOUS, "miss session close session:%p", psession_node->session);
-			miss_server_session_close(psession_node->session);
-			log_qcy(DEBUG_SERIOUS, "miss session del node start!psession_node:%p", psession_node);
-			miss_list_del(&(psession_node->list));
-			log_qcy(DEBUG_SERIOUS, "miss session del node end!");
-			free(psession_node);
-			log_qcy(DEBUG_SERIOUS, "miss session del node free!");
-		}
-		log_qcy(DEBUG_SERIOUS, "miss server free session end! ");
-	}
-	ret = pthread_rwlock_unlock(&info.lock);
-	if (ret) {
-		log_qcy(DEBUG_SERIOUS, "add session wrlock fail, ret = %d", ret);
-		return -1;
-	}
-	return 0;
+    return ret;
 }
 
 /*
