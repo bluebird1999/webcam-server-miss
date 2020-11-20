@@ -729,7 +729,7 @@ static int session_send_audio_stream(int chn_id, message_t *msg)
         psession_node = list_entry(post, session_node_t, list);
         if(psession_node && (psession_node->audio_channel == chn_id)) {
             //send stream to miss
-            ret = miss_audio_send(psession_node->session, &frame_info, p);
+            ret = miss_video_send(psession_node->session, &frame_info, p);
             if (0 != ret) {
                 log_qcy(DEBUG_WARNING, "=====>>>>>>avSendFrameData Error: %d,session:%p, audioChn: %d, size: %d", ret,
                     psession_node->session, chn_id, msg->extra_size);
