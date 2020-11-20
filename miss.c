@@ -938,9 +938,11 @@ static int server_release_1(void)
 static int server_release_2(void)
 {
 	int ret = 0;
+	int retain_exit = info.exit;
 	msg_buffer_release(&message);
 	msg_free(&info.task.msg);
 	memset(&info,0,sizeof(server_info_t));
+	info.exit = retain_exit;
 	memset(&config,0,sizeof(miss_config_t));
 	memset(&client_session,0,sizeof(client_session));
 	memset(&player,0,sizeof(player_iot_config_t));
@@ -1003,7 +1005,6 @@ static int server_message_proc(void)
 			break;
 		case MSG_MISS_RPC_SEND:
 			ret1 = 0;
-			log_qcy(DEBUG_VERBOSE, " MSG_MISS_RPC_SEND = %s", (char*)msg.arg);
 			if( msg.arg_in.cat == -1 ) {
 				ret1 = miss_rpc_process(NULL, (char*)msg.arg, msg.arg_size-1);
 			}
@@ -1024,7 +1025,7 @@ static int server_message_proc(void)
 			    		}
 			    	}
 		    		else {
-//		    			log_qcy(DEBUG_INFO, "-------error message found, error = %s", err);
+		    			log_qcy(DEBUG_INFO, "-------error message found, error = %s", (char*)msg.arg);
 		    		}
 			    }
 			    else {
@@ -1183,7 +1184,7 @@ static void task_default(void)
 			break;
 		case STATUS_RESTART:
 			miss_server_disconnect();
-			sleep(3);
+			sleep(5);
 			info.status = STATUS_WAIT;
 			break;
 		case STATUS_ERROR:
@@ -1882,6 +1883,7 @@ int miss_set_ready(int st)
 int server_miss_start(void)
 {
 	int ret=-1;
+	info.exit = 0;
 	ret = pthread_create(&info.id, NULL, server_func, NULL);
 	if(ret != 0) {
 		log_qcy(DEBUG_SERIOUS, "miss server create error! ret = %d",ret);
