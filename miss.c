@@ -394,7 +394,8 @@ static int miss_message_callback(message_t *arg)
 		case MISS_ASYN_VIDEO_STOP:
 			pnod->video_tid = -1;
 			pnod->video_status = STREAM_NONE;
-			pnod->source = SOURCE_NONE;
+			if( pnod->audio_status == STREAM_NONE )
+				pnod->source = SOURCE_NONE;
 			pnod->lock = 0;
 			if( arg->arg_pass.duck == 1) { //player
 				/********message body********/
@@ -420,6 +421,8 @@ static int miss_message_callback(message_t *arg)
 		case MISS_ASYN_AUDIO_STOP:
 			pnod->audio_tid = -1;
 			pnod->audio_status = STREAM_NONE;
+			if( pnod->video_status == STREAM_NONE )
+				pnod->source = SOURCE_NONE;
 			break;
 		case MISS_ASYN_VIDEO_CTRL:
 			if( arg->result == 0) code = MISS_NO_ERROR;
@@ -663,6 +666,7 @@ static int session_send_video_stream(int chn_id, message_t *msg)
     miss_frame_header_t frame_info = {0};
     int ret;
     av_data_info_t	*avinfo;
+    static buffer_block = 0;
     unsigned char	*p;
     p = (unsigned char*)msg->extra;
     if( p==NULL || msg->arg==NULL ) return -1;
@@ -686,11 +690,21 @@ static int session_send_video_stream(int chn_id, message_t *msg)
         if(psession_node && (psession_node->video_channel == chn_id)) {
             //send stream to miss
             ret = miss_video_send(psession_node->session, &frame_info, p);
-            if (0 != ret) {
-                log_qcy(DEBUG_WARNING, "=====>>>>>>avSendFrameData Error: %d,session:%p, videoChn: %d, size: %d", ret,
-                    psession_node->session, chn_id, msg->extra_size);
+            if ( ret !=0 ) {
+                log_qcy(DEBUG_WARNING, "send miss-video data error: %d, size: %d", ret,msg->extra_size);
+            	if( ret == MISS_ERR_NO_BUFFER ) {
+            		if( buffer_block > 5 ) {
+						miss_session_query(psession_node->session, MISS_QUERY_CMD_SEND_CLEAR_BUFFER, NULL);
+						log_qcy(DEBUG_INFO, "send buffer cleared!");
+						buffer_block = 0;
+            		}
+            		else {
+            			buffer_block ++ ;
+            		}
+            	}
             }
             else {
+            	buffer_block = 0;
             }
         }
     }
@@ -705,6 +719,7 @@ static int session_send_audio_stream(int chn_id, message_t *msg)
 {
 	client_session_t* pclient_session = &client_session;
     miss_frame_header_t frame_info = {0};
+    static buffer_block = 0;
     int ret;
     av_data_info_t *avinfo;
     unsigned char	*p;
@@ -730,11 +745,21 @@ static int session_send_audio_stream(int chn_id, message_t *msg)
         if(psession_node && (psession_node->audio_channel == chn_id)) {
             //send stream to miss
             ret = miss_video_send(psession_node->session, &frame_info, p);
-            if (0 != ret) {
-                log_qcy(DEBUG_WARNING, "=====>>>>>>avSendFrameData Error: %d,session:%p, audioChn: %d, size: %d", ret,
-                    psession_node->session, chn_id, msg->extra_size);
+            if ( ret !=0 ) {
+                log_qcy(DEBUG_WARNING, "send miss-audio data error: %d, size: %d", ret,msg->extra_size);
+            	if( ret == MISS_ERR_NO_BUFFER ) {
+            		if( buffer_block > 5 ) {
+						miss_session_query(psession_node->session, MISS_QUERY_CMD_SEND_CLEAR_BUFFER, NULL);
+						log_qcy(DEBUG_INFO, "send buffer cleared!");
+						buffer_block = 0;
+            		}
+            		else {
+            			buffer_block ++ ;
+            		}
+            	}
             }
             else {
+            	buffer_block = 0;
             }
         }
     }
