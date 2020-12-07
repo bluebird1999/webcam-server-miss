@@ -22,7 +22,6 @@
 /*
  * static
  */
-static pthread_rwlock_t			lock;
 static int						dirty;
 static miss_config_t			miss_config;
 static config_map_t miss_config_profile_map[] = {
@@ -55,11 +54,6 @@ static int miss_config_save(void)
 	int ret = 0;
 	message_t msg;
 	char fname[MAX_SYSTEM_STRING_SIZE*2];
-	ret = pthread_rwlock_wrlock(&lock);
-	if(ret)	{
-		log_qcy(DEBUG_SERIOUS, "add lock fail, ret = %d\n", ret);
-		return ret;
-	}
 	if( misc_get_bit(dirty, CONFIG_MISS_PROFILE) ) {
 		memset(fname,0,sizeof(fname));
 		sprintf(fname,"%s%s",_config_.qcy_path, CONFIG_MISS_PROFILE_PATH);
@@ -73,24 +67,14 @@ static int miss_config_save(void)
 		msg.message = MSG_MANAGER_TIMER_REMOVE;
 		msg.arg_in.handler = miss_config_save;
 		/****************************/
-		manager_message(&msg);
+		manager_common_send_message(SERVER_MANAGER, &msg);
 	}
-	ret = pthread_rwlock_unlock(&lock);
-	if (ret)
-		log_qcy(DEBUG_SERIOUS, "add unlock fail, ret = %d\n", ret);
-
 	return ret;
 }
 
 int config_miss_update_token(miss_config_t* mconfig)
 {
 	int ret = 0;
-	ret = pthread_rwlock_wrlock(&lock);
-	if(ret)	{
-		log_qcy(DEBUG_SERIOUS, "add lock fail, ret = %d\n", ret);
-		return ret;
-	}
-
 	ret = miss_config_device_read(miss_config.profile.board_type);
 	if(!ret)
 		misc_set_bit(&miss_config.status, CONFIG_MISS_DEVICE,1);
@@ -98,11 +82,6 @@ int config_miss_update_token(miss_config_t* mconfig)
 		misc_set_bit(&miss_config.status, CONFIG_MISS_DEVICE,0);
 
 	strncpy(mconfig->profile.token, miss_config.profile.token, strlen(miss_config.profile.token));
-
-	ret = pthread_rwlock_unlock(&lock);
-	if (ret)
-		log_qcy(DEBUG_SERIOUS, "add unlock fail, ret = %d\n", ret);
-
 	return ret;
 }
 
@@ -237,12 +216,6 @@ int config_miss_read(miss_config_t *mconfig)
 {
 	int ret,ret1=0;
 	char fname[MAX_SYSTEM_STRING_SIZE*2];
-	pthread_rwlock_init(&lock, NULL);
-	ret = pthread_rwlock_wrlock(&lock);
-	if(ret)	{
-		log_qcy(DEBUG_SERIOUS, "add lock fail, ret = %d\n", ret);
-		return ret;
-	}
 	memset(&miss_config.profile, 0, sizeof(miss_profile_t));
 	memset(fname,0,sizeof(fname));
 	sprintf(fname,"%s%s",_config_.qcy_path, CONFIG_MISS_PROFILE_PATH);
@@ -259,10 +232,6 @@ int config_miss_read(miss_config_t *mconfig)
 	else
 		misc_set_bit(&miss_config.status, CONFIG_MISS_DEVICE,0);
 	ret1 |= ret;
-	ret = pthread_rwlock_unlock(&lock);
-	if (ret)
-		log_qcy(DEBUG_SERIOUS, "add unlock fail, ret = %d\n", ret);
-	ret1 |= ret;
 	memcpy(mconfig, &miss_config, sizeof(miss_config_t));
 	return ret1;
 }
@@ -270,11 +239,6 @@ int config_miss_read(miss_config_t *mconfig)
 int config_miss_set(int module, void *arg)
 {
 	int ret = 0;
-	ret = pthread_rwlock_wrlock(&lock);
-	if(ret)	{
-		log_qcy(DEBUG_SERIOUS, "add lock fail, ret = %d\n", ret);
-		return ret;
-	}
 	if(dirty==0) {
 		message_t msg;
 		message_arg_t arg;
@@ -287,32 +251,11 @@ int config_miss_set(int module, void *arg)
 		msg.arg_in.duck = 0;
 		msg.arg_in.handler = &miss_config_save;
 		/****************************/
-		manager_message(&msg);
+		manager_common_send_message(SERVER_MANAGER, &msg);
 	}
 	misc_set_bit(&dirty, module, 1);
 	if( module == CONFIG_MISS_PROFILE) {
 		memcpy( (miss_profile_t*)(&miss_config.profile), arg, sizeof(miss_profile_t));
 	}
-	ret = pthread_rwlock_unlock(&lock);
-	if (ret)
-		log_qcy(DEBUG_SERIOUS, "add unlock fail, ret = %d\n", ret);
 	return ret;
-}
-
-int config_miss_get_config_status(int module)
-{
-	int st,ret=0;
-	ret = pthread_rwlock_wrlock(&lock);
-	if(ret)	{
-		log_qcy(DEBUG_SERIOUS, "add lock fail, ret = %d\n", ret);
-		return ret;
-	}
-	if(module==-1)
-		st = miss_config.status;
-	else
-		st = misc_get_bit(miss_config.status, module);
-	ret = pthread_rwlock_unlock(&lock);
-	if (ret)
-		log_qcy(DEBUG_SERIOUS, "add unlock fail, ret = %d\n", ret);
-	return st;
 }
