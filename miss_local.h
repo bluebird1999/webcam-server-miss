@@ -35,6 +35,7 @@
 #define		MISS_EXIT_CONDITION						0
 
 #define		MISS_LOCAL_MAX_NO_BUFFER_TIMES			5
+#define		MISS_TASK_TIMEOUT						100
 
 /*
  * structure
@@ -63,6 +64,7 @@ typedef struct session_task_t {
 	char			status;
 	char			old_status;
 	char			msg_lock;
+	unsigned int	timeout;
 } session_task_t;
 
 typedef struct session_node_t{

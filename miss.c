@@ -601,6 +601,12 @@ static int miss_rpc_send_proc(message_t *msg)
 	    			log_qcy(DEBUG_INFO, "-------tryout found, try to start miss server");
 	    		}
 	    	}
+	    	else if( strstr( (char*)msg->arg, "timeout") != NULL ) {
+	    		if( client_session.miss_server_ready == 0 ) {
+	    			info.status = STATUS_RESTART;
+	    			log_qcy(DEBUG_INFO, "-------timeout found, try to start miss server");
+	    		}
+	    	}
     		else {
     			log_qcy(DEBUG_INFO, "-------error message found, error = %s", (char*)msg->arg);
     		}
@@ -712,11 +718,10 @@ static int miss_clean_stream(session_node_t *psession_node)
 	int ret = 0;
 	message_t msg;
 	if( psession_node ) {
-		miss_helper_activate_stream(psession_node->id, 0);
-		miss_helper_activate_stream(psession_node->id, 1);
 		if( psession_node->source == SOURCE_LIVE) {
 			if( psession_node->video_status == STREAM_START ) {
-				psession_node->video_status == STREAM_NONE;
+				psession_node->video_status = STREAM_NONE;
+				miss_helper_activate_stream(psession_node->id, 0);
 				/********message body********/
 				msg_init(&msg);
 				msg.message = MSG_VIDEO_STOP;
@@ -725,7 +730,8 @@ static int miss_clean_stream(session_node_t *psession_node)
 				/****************************/
 			}
 			if( psession_node->audio_status == STREAM_START ) {
-				psession_node->audio_status == STREAM_NONE;
+				psession_node->audio_status = STREAM_NONE;
+				miss_helper_activate_stream(psession_node->id, 1);
 				/********message body********/
 				msg_init(&msg);
 				msg.message = MSG_AUDIO_STOP;
@@ -738,8 +744,10 @@ static int miss_clean_stream(session_node_t *psession_node)
 		else if( psession_node->source == SOURCE_PLAYER ) {
 			if( psession_node->video_status == STREAM_START ||
 				psession_node->audio_status == STREAM_START	) {
-				psession_node->video_status == STREAM_NONE;
-				psession_node->audio_status == STREAM_NONE;
+				psession_node->video_status = STREAM_NONE;
+				psession_node->audio_status = STREAM_NONE;
+				miss_helper_activate_stream(psession_node->id, 0);
+				miss_helper_activate_stream(psession_node->id, 1);
 				/********message body********/
 				msg_init(&msg);
 				msg.message = MSG_PLAYER_STOP;
@@ -1590,6 +1598,7 @@ static void session_task_live(session_node_t *node)
 				manager_common_send_message(SERVER_AUDIO, &msg);
 	        }
 	        node->task.status = TASK_IDLE;
+	        node->task.timeout = 0;
 			break;
 		}
 		case TASK_IDLE:
@@ -1599,10 +1608,26 @@ static void session_task_live(session_node_t *node)
 						node->task.status = TASK_RUN;
 						node->source = SOURCE_LIVE;
 					}
+					else {
+						node->task.timeout++;
+						if( node->task.timeout > MISS_TASK_TIMEOUT) {
+							node->task.timeout = 0;
+					        log_qcy(DEBUG_INFO, "timeout inside task_live idle.");
+							goto exit;
+						}
+					}
 				}
 				else {
 					node->task.status = TASK_RUN;
 					node->source = SOURCE_LIVE;
+				}
+			}
+			else {
+				node->task.timeout++;
+				if( node->task.timeout > MISS_TASK_TIMEOUT) {
+					node->task.timeout = 0;
+			        log_qcy(DEBUG_INFO, "timeout inside task_live idle.");
+					goto exit;
 				}
 			}
 			break;
@@ -1700,6 +1725,12 @@ static void session_task_playback(session_node_t *node)
 						manager_common_send_message(SERVER_PLAYER, &msg);
 					}
 */
+				}
+				node->task.timeout++;
+				if( node->task.timeout > MISS_TASK_TIMEOUT) {
+					node->task.timeout = 0;
+					log_qcy(DEBUG_INFO, "timeout inside task_playback idle.");
+					goto exit;
 				}
 			}
 			else {
@@ -1817,20 +1848,23 @@ static int miss_message_block_helper(session_node_t *node)
 	int ret = 0;
 	int id = -1, id1, index = 0;
 	miss_session_t *session;
+	message_t msg;
 	void *arg = NULL;
 	if( !node->task.msg_lock ) return 0;
 	//search for unblocked message and swap if necessory
 	index = 0;
-	ret = msg_buffer_probe_item_extra(&message, index, &id, &arg);
-	if(ret || ( ((miss_session_t*)arg)!=node->session) ) return 0;
-	if( msg_is_system(id) || msg_is_response(id) ) return 0;
+	ret = msg_buffer_probe_item(&message, index, &msg);
+	msg_init(&msg);
+	if(ret || (msg.arg_in.handler != node->session) ) return 0;
+	if( msg_is_system(msg.message) || msg_is_response(msg.message) ) return 0;
 	do {
 		index++;
 		arg = NULL;
-		ret = msg_buffer_probe_item_extra(&message, index, &id1, &arg);
+		msg_init(&msg);
+		ret = msg_buffer_probe_item(&message, index, &msg);
 		if(ret) return 1;
-		if( (msg_is_system(id1) || msg_is_response(id1)) ||
-				( ((miss_session_t*)arg)!=node->session) ) {	//find one behind system or response message
+		if( (msg_is_system(msg.message) || msg_is_response(msg.message)) ||
+				( msg.arg_in.handler != node->session) ) {	//find one behind system or response message
 			msg_buffer_swap_item(&message, 0, index);
 			log_qcy(DEBUG_WARNING, "MISS: swapped message happend, message %x was swapped with message %x", id, id1);
 			return 0;
