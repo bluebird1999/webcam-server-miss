@@ -16,7 +16,7 @@
 /*
  * define
  */
-#define		SERVER_MISS_VERSION_STRING			"alpha-4.1"
+#define		SERVER_MISS_VERSION_STRING			"alpha-4.2"
 
 #define		MSG_MISS_BASE						(SERVER_MISS<<16)
 #define		MSG_MISS_SIGINT						(MSG_MISS_BASE | 0x0000)
@@ -64,6 +64,11 @@
 /*
  * structure
  */
+enum session_st_t {
+	SESSION_EXIST = -2,
+	SESSION_FULL,
+};
+
 enum cmdtype {
 	GET_RECORD_FILE = 1,
 	GET_RECORD_TIMESTAMP = 2,

@@ -183,7 +183,7 @@ static int miss_get_player_infomation_ack(message_t *msg)
 	int ret = 0;
 	miss_session_t	*session;
 	pthread_rwlock_rdlock(&ilock);
-	session = miss_session_check_node(msg->arg_pass.handler);
+	session = msg->arg_pass.handler;
 	if( session == NULL ) {
 		log_qcy(DEBUG_SERIOUS, "session %p with id %d isn't find!", msg->arg_pass.handler, msg->arg_pass.wolf);
 		pthread_rwlock_unlock(&ilock);
@@ -295,6 +295,8 @@ static int miss_message_callback(message_t *arg)
 				ret = miss_cmd_send(session,MISS_CMD_PLAYBACK_RESP, (void*)&code, sizeof(int));
 				if( arg->arg_in.cat == 0 )
 					pnod->task.status = TASK_WAIT;
+				else
+					pnod->task.status = TASK_RUN;
 			}
 			else {
 				pnod->task.status = TASK_FINISH;
@@ -816,9 +818,41 @@ static void server_release_3(void)
 	memset(&info, 0, sizeof(server_info_t));
 }
 
+static int miss_session_check(miss_session_t *session)
+{
+	int num = 0, i, j, find;
+	int sid[MAX_SESSION_NUMBER];
+	struct list_handle *post;
+	session_node_t *session_node = NULL;
+    list_for_each(post, &(client_session.head)) {
+        session_node = list_entry(post, session_node_t, list);
+        if(session_node) {
+        	if(session_node->session == session) {
+        		return SESSION_EXIST;
+        	}
+        	sid[num] = session_node->id;
+        	num++;
+        }
+    }
+    if( num >= MAX_SESSION_NUMBER )
+    	return SESSION_FULL;
+    for(i=0;i<MAX_SESSION_NUMBER;i++) {
+    	find = 0;
+    	for(j=0;j<num;j++) {
+    		if( sid[j] == i ) {
+    			find = 1;
+    			break;
+    		}
+    	}
+    	if( !find )
+    		return i;
+    }
+    return SESSION_FULL;
+}
+
 static int miss_session_status(message_t *msg)
 {
-    int ret = -1;
+    int ret = -1, sid;
     int error = msg->arg_in.dog;
     miss_session_t *session;
     struct list_handle *post;
@@ -827,8 +861,15 @@ static int miss_session_status(message_t *msg)
     switch(msg->arg_in.cat) {
     	case SESSION_STATUS_ADD:
     		pthread_rwlock_wrlock(&ilock);
-    	    if(client_session.use_session_num >= MAX_SESSION_NUMBER) {
+    	    session = (miss_session_t*)msg->arg_in.handler;
+    		sid = miss_session_check(session);
+    	    if( sid == SESSION_FULL) {
     	    	log_qcy(DEBUG_WARNING, "use_session_num:%d max:%d!", client_session.use_session_num, MAX_SESSION_NUMBER);
+    	    	pthread_rwlock_unlock(&ilock);
+    	    	break;
+    	    }
+    	    else if( sid == SESSION_EXIST ){
+    	    	log_qcy(DEBUG_WARNING, "use_session: %p exist", session);
     	    	pthread_rwlock_unlock(&ilock);
     	    	break;
     	    }
@@ -839,14 +880,14 @@ static int miss_session_status(message_t *msg)
     	        break;
     	    }
     	    memset(session_node, 0, sizeof(session_node_t));
-    	    session = (miss_session_t*)msg->arg_in.handler;
     	    session_node->session = session;
+    	    session_node->id = sid;
     	    miss_list_add_tail(&(session_node->list), &(client_session.head));
     	    //***initial
     	    session_node->task.func = session_task_none;
     		//user data
     	    pSession_valu = malloc(sizeof(int));
-    	    *pSession_valu = client_session.use_session_num;
+    	    *pSession_valu = sid;
     	    *((void**)msg->arg) = pSession_valu;
     	    client_session.use_session_num ++;
     		log_qcy(DEBUG_INFO, "[miss_session_add]miss:%d session_node->session:%d",session,session_node->session);
@@ -2229,7 +2270,7 @@ int server_miss_video_message(message_t *msg)
 		return MISS_LOCAL_ERR_MISS_GONE;
 	}
 	session_node_t *pnod = miss_session_check_node_by_id( id );
-	if( (pnod == NULL) ) {
+	if( (pnod == NULL) || (msg->arg_in.handler!=pnod->session) ) {
 		log_qcy(DEBUG_WARNING, "miss video: session id %d isn't find!", id);
 		pthread_rwlock_unlock(&ilock);
 		return MISS_LOCAL_ERR_SESSION_GONE;
@@ -2267,7 +2308,7 @@ int server_miss_audio_message(message_t *msg)
 		return MISS_LOCAL_ERR_MISS_GONE;
 	}
 	session_node_t *pnod = miss_session_check_node_by_id( id );
-	if( (pnod == NULL) ) {
+	if( (pnod == NULL) || (msg->arg_in.handler!=pnod->session) ) {
 		log_qcy(DEBUG_WARNING, "miss audio: session id %d isn't find!", id);
 		pthread_rwlock_unlock(&ilock);
 		return MISS_LOCAL_ERR_SESSION_GONE;
