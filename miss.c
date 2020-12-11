@@ -1115,7 +1115,7 @@ int miss_cmd_speaker_stop(int session_id, miss_session_t *session, char *param)
 	msg.arg_pass.handler = session;
 	manager_common_send_message(SERVER_SPEAKER, &msg);
 	/****************************/
-    if( node->task.func == task_default ) {
+    if( node->task.func == session_task_none ) {
     	if( node->audio_status == STREAM_START)  {
 			/********message body********/
 			msg_init(&msg);
@@ -1649,7 +1649,7 @@ static void session_task_live(session_node_t *node)
 						node->task.status = TASK_RUN;
 						node->source = SOURCE_LIVE;
 					}
-					else {
+/*					else {
 						node->task.timeout++;
 						if( node->task.timeout > MISS_TASK_TIMEOUT) {
 							node->task.timeout = 0;
@@ -1657,6 +1657,7 @@ static void session_task_live(session_node_t *node)
 							goto exit;
 						}
 					}
+*/
 				}
 				else {
 					node->task.status = TASK_RUN;
@@ -1840,12 +1841,11 @@ exit2:
 		node->task.msg_lock = 1;
 	}
 	else {
-		node->task.func = task_default;
+		node->task.func = session_task_none;
 		node->task.msg_lock = 0;
 		log_qcy(DEBUG_INFO,"MISS: switch to default task!");
 	}
 	memset(&player[node->id], 0, sizeof(player_init_t));
-	node->task.msg_lock = 0;
 	return;
 }
 
