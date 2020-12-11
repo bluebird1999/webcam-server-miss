@@ -27,6 +27,7 @@ static miss_config_t			miss_config;
 static config_map_t miss_config_profile_map[] = {
 	{"board_type",  			&(miss_config.profile.board_type),  		cfg_u32, 0,0, 0,10,    },
 	{"sdk_type",  				&(miss_config.profile.sdk_type),  			cfg_string, 'device',0, 0,32,    },
+	{"log_path",                &(miss_config.profile.log_path),            cfg_string, '/mnt/media/',0, 0,32,    },
     {"max_session_num", 		&(miss_config.profile.max_session_num), 	cfg_s32, 128,0, -1,10000,    },
     {"max_video_recv_size",     &(miss_config.profile.max_video_recv_size), cfg_s32, 512000,0, -1,1000000,	},
     {"max_audio_recv_size",     &(miss_config.profile.max_audio_recv_size), cfg_s32, 51200,0, -1,1000000,  	},

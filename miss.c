@@ -291,8 +291,6 @@ static int miss_message_callback(message_t *arg)
 				pnod->lock = 0;
 				pnod->source = SOURCE_PLAYER;
 				log_qcy(DEBUG_INFO, "========playback setting success=========");
-				code = MISS_NO_ERROR;
-				ret = miss_cmd_send(session,MISS_CMD_PLAYBACK_RESP, (void*)&code, sizeof(int));
 				if( arg->arg_in.cat == 0 )
 					pnod->task.status = TASK_WAIT;
 				else
@@ -301,9 +299,9 @@ static int miss_message_callback(message_t *arg)
 			else {
 				pnod->task.status = TASK_FINISH;
 				log_qcy(DEBUG_INFO, "========playback setting failed=========");
-				code = MISS_ERR_CLIENT_NO_SUPPORT;
-				ret = miss_cmd_send(session,MISS_CMD_PLAYBACK_RESP, (void*)&code, sizeof(int));
 			}
+			code = arg->arg_in.tiger;
+			ret = miss_cmd_send(session,MISS_CMD_PLAYBACK_RESP, (void*)&code, sizeof(int));
 			break;
 		case MISS_ASYN_PLAYER_START:
 			if( arg->result == 0 ) {
@@ -353,6 +351,8 @@ static int miss_message_callback(message_t *arg)
 			miss_helper_activate_stream(pnod->id, 1);
 			pnod->task.status = TASK_FINISH;
 			log_qcy(DEBUG_INFO, "========playback finished!=========");
+			code = PLAYER_FINISH;
+			ret = miss_cmd_send(session,MISS_CMD_PLAYBACK_RESP, (void*)&code, sizeof(int));
 			break;
 		case MISS_ASYN_SPEAKER_STOP:
 		case MISS_ASYN_SPEAKER_CTRL:
@@ -676,7 +676,7 @@ static int miss_server_connect(void)
 	dev.did = did;
 	dev.did_len = strlen(did);
 	miss_log_set_level(MISS_LOG_DEBUG);
-	sprintf(fname,"%slog/miss.log", _config_.qcy_path);
+	sprintf(fname,"%slog/miss.log", config.profile.log_path);
 	miss_log_set_path(CONFIG_MISS_LOG_PATH);
 	ret = miss_server_init(&dev, &server);
 	if (MISS_NO_ERROR != ret) {
@@ -1663,7 +1663,7 @@ static void session_task_live(session_node_t *node)
 					node->source = SOURCE_LIVE;
 				}
 			}
-			else {
+/*			else {
 				node->task.timeout++;
 				if( node->task.timeout > MISS_TASK_TIMEOUT) {
 					node->task.timeout = 0;
@@ -1671,6 +1671,7 @@ static void session_task_live(session_node_t *node)
 					goto exit;
 				}
 			}
+*/
 			break;
 		case TASK_RUN: {
 			if( node->task.msg_lock )
@@ -1767,12 +1768,14 @@ static void session_task_playback(session_node_t *node)
 					}
 */
 				}
+/*
 				node->task.timeout++;
 				if( node->task.timeout > MISS_TASK_TIMEOUT) {
 					node->task.timeout = 0;
 					log_qcy(DEBUG_INFO, "timeout inside task_playback idle.");
 					goto exit;
 				}
+*/
 			}
 			else {
 				node->task.status = TASK_RUN;

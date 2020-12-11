@@ -35,6 +35,7 @@ typedef struct miss_profile_t {
 	char 	model[MAX_SYSTEM_STRING_SIZE];
 	char 	vendor[MAX_SYSTEM_STRING_SIZE];
 	char 	sdk_type[MAX_SYSTEM_STRING_SIZE];
+	char    log_path[MAX_SYSTEM_STRING_SIZE];
 	char 	token[2*MAX_SYSTEM_STRING_SIZE];
 	int		max_session_num;
 	int		max_video_recv_size;

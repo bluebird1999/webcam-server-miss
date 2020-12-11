@@ -16,7 +16,7 @@
 /*
  * define
  */
-#define		SERVER_MISS_VERSION_STRING			"alpha-4.2"
+#define		SERVER_MISS_VERSION_STRING			"alpha-4.3"
 
 #define		MSG_MISS_BASE						(SERVER_MISS<<16)
 #define		MSG_MISS_SIGINT						(MSG_MISS_BASE | 0x0000)
