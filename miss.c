@@ -818,34 +818,6 @@ static void server_release_3(void)
 	memset(&info, 0, sizeof(server_info_t));
 }
 
-static int miss_init_routine(void)
-{
-	message_t msg;
-	if( config.profile.board_type && !misc_get_bit( info.init_status, MISS_INIT_CONDITION_MIIO_DID ) ) {
-	    /********message body********/
-		msg_init(&msg);
-		msg.message = MSG_MIIO_PROPERTY_GET;
-		msg.sender = msg.receiver = SERVER_MISS;
-		msg.arg_in.cat = MIIO_PROPERTY_DID_STATUS;
-		manager_common_send_message(SERVER_MIIO,   &msg);
-		/****************************/
-	}
-	int actual_init_num = MISS_INIT_CONDITION_NUM;
-	if( !config.profile.board_type )
-		actual_init_num--;
-	if( misc_full_bit( info.init_status, actual_init_num ) ) {
-		info.status = STATUS_WAIT;
-		/********message body********/
-		msg_init(&msg);
-		msg.message = MSG_MANAGER_TIMER_REMOVE;
-		msg.sender = msg.receiver = SERVER_MISS;
-		msg.arg_in.handler = miss_init_routine;
-		manager_common_send_message(SERVER_MANAGER, &msg);
-		/****************************/
-	}
-	return 0;
-}
-
 /*
  *
  *
@@ -2069,21 +2041,37 @@ static int server_none(void)
 		ret = config_miss_read(&config);
 		if( !ret && misc_full_bit(config.status, CONFIG_MISS_MODULE_NUM) ) {
 			misc_set_bit(&info.init_status, MISS_INIT_CONDITION_CONFIG, 1);
-		    /********message body********/
-			msg_init(&msg);
-			msg.message = MSG_MANAGER_TIMER_ADD;
-			msg.sender = SERVER_MISS;
-			msg.arg_in.cat = 100;
-			msg.arg_in.dog = 0;
-			msg.arg_in.duck = 0;
-			msg.arg_in.handler = &miss_init_routine;
-			manager_common_send_message(SERVER_MANAGER, &msg);
-			/****************************/
 		}
 		else {
 			info.status = STATUS_ERROR;
 			return -1;
 		}
+	}
+	if( config.profile.board_type && !misc_get_bit( info.init_status, MISS_INIT_CONDITION_MIIO_DID ) ) {
+	    /********message body********/
+		msg_init(&msg);
+		msg.message = MSG_MIIO_PROPERTY_GET;
+		msg.sender = msg.receiver = SERVER_MISS;
+		msg.arg_in.cat = MIIO_PROPERTY_DID_STATUS;
+		manager_common_send_message(SERVER_MIIO,   &msg);
+		/****************************/
+		usleep(MESSAGE_RESENT_SLEEP);
+	}
+	if( !misc_get_bit( info.init_status, MISS_INIT_CONDITION_MIIO_CONNECTED)) {
+		/********message body********/
+		msg_init(&msg);
+		msg.message = MSG_MIIO_PROPERTY_GET;
+		msg.sender = msg.receiver = SERVER_MISS;
+		msg.arg_in.cat = MIIO_PROPERTY_CLIENT_STATUS;
+		ret = manager_common_send_message(SERVER_MIIO, &msg);
+		/***************************/
+		usleep(MESSAGE_RESENT_SLEEP);
+	}
+	int actual_init_num = MISS_INIT_CONDITION_NUM;
+	if( !config.profile.board_type )
+		actual_init_num--;
+	if( misc_full_bit( info.init_status, actual_init_num ) ) {
+		info.status = STATUS_WAIT;
 	}
 	return ret;
 }
