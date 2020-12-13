@@ -818,6 +818,39 @@ static void server_release_3(void)
 	memset(&info, 0, sizeof(server_info_t));
 }
 
+static int miss_init_routine(void)
+{
+	message_t msg;
+	if( config.profile.board_type && !misc_get_bit( info.init_status, MISS_INIT_CONDITION_MIIO_DID ) ) {
+	    /********message body********/
+		msg_init(&msg);
+		msg.message = MSG_MIIO_PROPERTY_GET;
+		msg.sender = msg.receiver = SERVER_MISS;
+		msg.arg_in.cat = MIIO_PROPERTY_DID_STATUS;
+		manager_common_send_message(SERVER_MIIO,   &msg);
+		/****************************/
+	}
+	int actual_init_num = MISS_INIT_CONDITION_NUM;
+	if( !config.profile.board_type )
+		actual_init_num--;
+	if( misc_full_bit( info.init_status, actual_init_num ) ) {
+		info.status = STATUS_WAIT;
+		/********message body********/
+		msg_init(&msg);
+		msg.message = MSG_MANAGER_TIMER_REMOVE;
+		msg.sender = msg.receiver = SERVER_MISS;
+		msg.arg_in.handler = miss_init_routine;
+		manager_common_send_message(SERVER_MANAGER, &msg);
+		/****************************/
+	}
+	return 0;
+}
+
+/*
+ *
+ *
+ *
+ */
 static int miss_session_check(miss_session_t *session)
 {
 	int num = 0, i, j, find;
@@ -1588,6 +1621,7 @@ static void session_task_live(session_node_t *node)
 	msg.arg_pass.wolf = session_id;
 	msg.arg_pass.handler = session;
 	/*****************************/
+//	log_qcy(DEBUG_INFO, "-----------live staus = %d, oldstatus = %d", node->task.old_status, node->task.status);
 	node->task.old_status = node->task.status;
 	switch( node->task.status ){
 		case TASK_INIT: {
@@ -1649,30 +1683,12 @@ static void session_task_live(session_node_t *node)
 						node->task.status = TASK_RUN;
 						node->source = SOURCE_LIVE;
 					}
-/*					else {
-						node->task.timeout++;
-						if( node->task.timeout > MISS_TASK_TIMEOUT) {
-							node->task.timeout = 0;
-					        log_qcy(DEBUG_INFO, "timeout inside task_live idle.");
-							goto exit;
-						}
-					}
-*/
 				}
 				else {
 					node->task.status = TASK_RUN;
 					node->source = SOURCE_LIVE;
 				}
 			}
-/*			else {
-				node->task.timeout++;
-				if( node->task.timeout > MISS_TASK_TIMEOUT) {
-					node->task.timeout = 0;
-			        log_qcy(DEBUG_INFO, "timeout inside task_live idle.");
-					goto exit;
-				}
-			}
-*/
 			break;
 		case TASK_RUN: {
 			if( node->task.msg_lock )
@@ -1762,21 +1778,7 @@ static void session_task_playback(session_node_t *node)
 						msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
 						manager_common_send_message(SERVER_VIDEO, &msg);
 					}
-/*					else if( node->source == SOURCE_PLAYER) {
-						msg.message = MSG_PLAYER_STOP;
-						msg.arg_pass.cat = MISS_ASYN_PLAYER_STOP;
-						manager_common_send_message(SERVER_PLAYER, &msg);
-					}
-*/
 				}
-/*
-				node->task.timeout++;
-				if( node->task.timeout > MISS_TASK_TIMEOUT) {
-					node->task.timeout = 0;
-					log_qcy(DEBUG_INFO, "timeout inside task_playback idle.");
-					goto exit;
-				}
-*/
 			}
 			else {
 				node->task.status = TASK_RUN;
@@ -1792,8 +1794,7 @@ static void session_task_playback(session_node_t *node)
 					msg.arg_pass.cat = MISS_ASYN_PLAYER_AUDIO_START;
 					manager_common_send_message(SERVER_PLAYER, &msg);
 				}
-				else{
-					msg.message = MSG_PLAYER_AUDIO_STOP;
+				else{		msg.message = MSG_PLAYER_AUDIO_STOP;
 					msg.arg_pass.cat = MISS_ASYN_PLAYER_AUDIO_STOP;
 					manager_common_send_message(SERVER_PLAYER, &msg);
 				}
@@ -1897,10 +1898,11 @@ static int miss_message_block_helper(session_node_t *node)
 	if( !node->task.msg_lock ) return 0;
 	//search for unblocked message and swap if necessory
 	index = 0;
-	ret = msg_buffer_probe_item(&message, index, &msg);
 	msg_init(&msg);
+	ret = msg_buffer_probe_item(&message, index, &msg);
 	if(ret || (msg.arg_in.handler != node->session) ) return 0;
 	if( msg_is_system(msg.message) || msg_is_response(msg.message) ) return 0;
+	id = msg.message;
 	do {
 		index++;
 		arg = NULL;
@@ -1910,6 +1912,7 @@ static int miss_message_block_helper(session_node_t *node)
 		if( (msg_is_system(msg.message) || msg_is_response(msg.message)) ||
 				( msg.arg_in.handler != node->session) ) {	//find one behind system or response message
 			msg_buffer_swap_item(&message, 0, index);
+			id1 = msg.message;
 			log_qcy(DEBUG_WARNING, "MISS: swapped message happend, message %x was swapped with message %x", id, id1);
 			return 0;
 		}
@@ -2066,26 +2069,22 @@ static int server_none(void)
 		ret = config_miss_read(&config);
 		if( !ret && misc_full_bit(config.status, CONFIG_MISS_MODULE_NUM) ) {
 			misc_set_bit(&info.init_status, MISS_INIT_CONDITION_CONFIG, 1);
+		    /********message body********/
+			msg_init(&msg);
+			msg.message = MSG_MANAGER_TIMER_ADD;
+			msg.sender = SERVER_MISS;
+			msg.arg_in.cat = 100;
+			msg.arg_in.dog = 0;
+			msg.arg_in.duck = 0;
+			msg.arg_in.handler = &miss_init_routine;
+			manager_common_send_message(SERVER_MANAGER, &msg);
+			/****************************/
 		}
 		else {
 			info.status = STATUS_ERROR;
 			return -1;
 		}
 	}
-	if( config.profile.board_type && !misc_get_bit( info.init_status, MISS_INIT_CONDITION_MIIO_DID ) ) {
-	    /********message body********/
-		msg_init(&msg);
-		msg.message = MSG_MIIO_PROPERTY_GET;
-		msg.sender = msg.receiver = SERVER_MISS;
-		msg.arg_in.cat = MIIO_PROPERTY_DID_STATUS;
-		manager_common_send_message(SERVER_MIIO,   &msg);
-		/****************************/
-	}
-	int actual_init_num = MISS_INIT_CONDITION_NUM;
-	if( !config.profile.board_type )
-		actual_init_num--;
-	if( misc_full_bit( info.init_status, actual_init_num ) )
-		info.status = STATUS_WAIT;
 	return ret;
 }
 
