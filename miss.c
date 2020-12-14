@@ -60,13 +60,13 @@ static message_buffer_t		video_buff[MAX_SESSION_NUMBER];
 static message_buffer_t		audio_buff[MAX_SESSION_NUMBER];
 static miss_config_t		config;
 static client_session_t		client_session;
-static pthread_rwlock_t		ilock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_rwlock_t		ilock = PTHREAD_RWLOCK_INITIALIZER;
 static pthread_mutex_t		mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t		cond = PTHREAD_COND_INITIALIZER;
-static pthread_mutex_t		vmutex[MAX_SESSION_NUMBER] = {PTHREAD_MUTEX_INITIALIZER};
-static pthread_cond_t		vcond[MAX_SESSION_NUMBER] = {PTHREAD_COND_INITIALIZER};
-static pthread_mutex_t		amutex[MAX_SESSION_NUMBER] = {PTHREAD_MUTEX_INITIALIZER};
-static pthread_cond_t		acond[MAX_SESSION_NUMBER] = {PTHREAD_COND_INITIALIZER};
+static pthread_mutex_t		vmutex[MAX_SESSION_NUMBER] = {PTHREAD_MUTEX_INITIALIZER,PTHREAD_MUTEX_INITIALIZER,PTHREAD_MUTEX_INITIALIZER};
+static pthread_cond_t		vcond[MAX_SESSION_NUMBER] = {PTHREAD_COND_INITIALIZER,PTHREAD_COND_INITIALIZER,PTHREAD_COND_INITIALIZER};
+static pthread_mutex_t		amutex[MAX_SESSION_NUMBER] = {PTHREAD_MUTEX_INITIALIZER,PTHREAD_MUTEX_INITIALIZER,PTHREAD_MUTEX_INITIALIZER };
+static pthread_cond_t		acond[MAX_SESSION_NUMBER] = {PTHREAD_COND_INITIALIZER,PTHREAD_COND_INITIALIZER,PTHREAD_COND_INITIALIZER};
 static player_init_t  		player[MAX_SESSION_NUMBER];
 
 //function
@@ -1338,9 +1338,10 @@ int miss_cmd_player_ctrl(int session_id, miss_session_t *session, char *param)
 	player[node->id].channel_merge = avchannelmerge;
 	player[node->id].session_id = node->id;
 	player[node->id].session = session;
-	if( (node->video_status == STREAM_START) ||
-		(switchtolive == 1) )
+	if( (node->video_status == STREAM_START) || (switchtolive == 1) )
 		player[node->id].switch_to_live = 1;
+	else if(switchtolive == 0)
+		player[node->id].switch_to_live = 0;
 	if( node->audio_status == STREAM_START) {
 		player[node->id].switch_to_live_audio = 1;
 		player[node->id].audio = 1;
@@ -1705,6 +1706,8 @@ static void session_task_live(session_node_t *node)
 exit:
 	node->task.func = session_task_none;
 	node->task.msg_lock = 0;
+	node->audio = 0;
+	node->video = 0;
 	log_qcy(DEBUG_INFO,"MISS: switch to default task!");
 	return;
 }
@@ -1816,6 +1819,8 @@ exit2:
 	else {
 		node->task.func = session_task_none;
 		node->task.msg_lock = 0;
+		node->video = 0;
+		node->audio = 0;
 		log_qcy(DEBUG_INFO,"MISS: switch to default task!");
 	}
 	memset(&player[node->id], 0, sizeof(player_init_t));
@@ -1860,32 +1865,51 @@ static int miss_check_condition(void)
 	return ret;
 }
 
-static int miss_message_block_helper(session_node_t *node)
+static int miss_message_block_helper(void)
 {
 	int ret = 0;
 	int id = -1, id1, index = 0;
-	miss_session_t *session;
 	message_t msg;
-	void *arg = NULL;
-	if( !node->task.msg_lock ) return 0;
+	session_node_t	*node;
+	miss_session_t  *session;
 	//search for unblocked message and swap if necessory
 	index = 0;
 	msg_init(&msg);
 	ret = msg_buffer_probe_item(&message, index, &msg);
-	if(ret || (msg.arg_in.handler != node->session) ) return 0;
-	if( msg_is_system(msg.message) || msg_is_response(msg.message) ) return 0;
+	if( ret ) {
+		log_qcy(DEBUG_VERBOSE, "===miss message block, return 0 when first message is empty");
+		return 0;
+	}
+	if( msg_is_system(msg.message) || msg_is_response(msg.message) ) {
+		log_qcy(DEBUG_VERBOSE, "===miss message block, return 0 when first message is system or response message %x", msg.message);
+		return 0;
+	}
+	node = miss_session_check_node(msg.arg_in.handler);
+	if( node==NULL ) {
+		log_qcy(DEBUG_VERBOSE, "===miss message block, return 0 when first message is not from valid session %p", msg.arg_in.handler);
+		return 0;
+	}
+	if( !(node->task.msg_lock) ) {
+		log_qcy(DEBUG_VERBOSE, "===miss message block, return 0 when first message is not from session %p with msg_lock=1", msg.arg_in.handler);
+		return 0;
+	}
 	id = msg.message;
 	do {
 		index++;
-		arg = NULL;
 		msg_init(&msg);
 		ret = msg_buffer_probe_item(&message, index, &msg);
-		if(ret) return 1;
-		if( (msg_is_system(msg.message) || msg_is_response(msg.message)) ||
-				( msg.arg_in.handler != node->session) ) {	//find one behind system or response message
+		if(ret) {
+			log_qcy(DEBUG_VERBOSE, "===miss message block, return 1 when message index = %d is not found!", index);
+			return 1;
+		}
+		node = miss_session_check_node(msg.arg_in.handler);
+		if( msg_is_system(msg.message) ||
+				msg_is_response(msg.message) ||
+									(node==NULL) ||
+										( node!=NULL && !(node->task.msg_lock) ) ) {	//find one behind system or response message
 			msg_buffer_swap_item(&message, 0, index);
 			id1 = msg.message;
-			log_qcy(DEBUG_WARNING, "MISS: swapped message happend, message %x was swapped with message %x", id, id1);
+			log_qcy(DEBUG_INFO, "MISS: swapped message happend, message %x was swapped with message %x", id, id1);
 			return 0;
 		}
 	}
@@ -1896,17 +1920,8 @@ static int miss_message_block_helper(session_node_t *node)
 static int miss_message_block(void)
 {
 	int ret = 0;
-    struct list_handle *post;
-    session_node_t *node = NULL;
 	pthread_rwlock_wrlock(&ilock);
-    list_for_each(post, &(client_session.head)) {
-    	node = list_entry(post, session_node_t, list);
-        if(node && node->session) {
-        	ret |= miss_message_block_helper(node);
-        	if(ret)
-        		break;
-        }
-    }
+	ret = miss_message_block_helper();
 	pthread_rwlock_unlock(&ilock);
 	return ret;
 }
@@ -1928,13 +1943,16 @@ static int server_message_proc(void)
 	void *msg_id = NULL;
 	char err[256];
 	int st;
-	if( miss_message_block() ) return 0;
 //condition
 	pthread_mutex_lock(&mutex);
 	if( message.head == message.tail ) {
 		if( miss_check_condition() ) {
 			pthread_cond_wait(&cond,&mutex);
 		}
+	}
+	if( miss_message_block() ) {
+		pthread_mutex_unlock(&mutex);
+		return 0;
 	}
 	msg_init(&msg);
 	ret = msg_buffer_pop(&message, &msg);
