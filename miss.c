@@ -514,6 +514,13 @@ static int session_send_video_stream(session_node_t* node, av_packet_t *packet)
 				miss_session_query(node->session, MISS_QUERY_CMD_SEND_CLEAR_BUFFER, NULL);
 				log_qcy(DEBUG_INFO, "send buffer cleared!");
 				buffer_block = 0;
+				/**********************************/
+				message_t msg;
+				msg_init(&msg);
+				msg.sender = msg.receiver = SERVER_MISS;
+				msg.message = MSG_MISS_BUFFER_FULL;
+				manager_common_send_message(SERVER_VIDEO, &msg);
+				/**********************************/
 			}
 			else {
 				buffer_block ++ ;
@@ -1690,13 +1697,15 @@ static void session_task_live(session_node_t *node)
 						manager_common_send_message(SERVER_AUDIO, &msg);
 					}
 					node->video_switch = 0;
-					goto exit;
+					node->task.status = TASK_FINISH;
 				}
 			}
 			break;
 		}
 		case TASK_FINISH:
-			goto exit;
+			if( node->source == SOURCE_NONE) {
+				goto exit;
+			}
 			break;
 		default:
 			log_qcy(DEBUG_SERIOUS, "!!!!!!!unprocessed server status in task_live = %d", node->task.status);
