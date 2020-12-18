@@ -106,6 +106,32 @@ static void miss_broadcast_thread_exit(void);
 /*
  * helper
  */
+static int miss_check_video_channel(session_node_t *node)
+{
+	if( (node->video_status == STREAM_NONE) &&
+		( misc_get_bit( info.thread_start, THREAD_VIDEO + node->id)==0 ) ) {
+		return 0;
+	}
+	if( (node->video_status == STREAM_START) &&
+		( misc_get_bit( info.thread_start, THREAD_VIDEO + node->id)==1 ) ) {
+		return 1;
+	}
+	return 2;
+}
+
+static int miss_check_audio_channel(session_node_t *node)
+{
+	if( (node->audio_status == STREAM_NONE) &&
+		( misc_get_bit( info.thread_start, THREAD_AUDIO + node->id)==0 ) ) {
+		return 0;
+	}
+	if( (node->audio_status == STREAM_START) &&
+		( misc_get_bit( info.thread_start, THREAD_AUDIO + node->id)==1 ) ) {
+		return 1;
+	}
+	return 2;
+}
+
 static session_node_t *miss_session_check_node(miss_session_t *session)
 {
 	client_session_t* pclient_session = &client_session;
@@ -234,8 +260,6 @@ static int miss_message_callback(message_t *arg)
 			log_qcy(DEBUG_INFO, "========start new video stream thread=========");
 			pnod->video_status = STREAM_START;
 			pnod->video_channel = arg->arg_pass.duck;
-			pnod->source = SOURCE_LIVE;
-			pnod->lock = 0;
 			pnod->video_frame = 0;
 			pthread_create(&pnod->video_tid, NULL, session_stream_send_video_func, (void*)pnod);
 			break;
@@ -245,7 +269,6 @@ static int miss_message_callback(message_t *arg)
 			pnod->video_status = STREAM_NONE;
 			if( pnod->audio_status == STREAM_NONE )
 				pnod->source = SOURCE_NONE;
-			pnod->lock = 0;
 			pnod->video_frame = 0;
 			miss_helper_activate_stream(pnod->id, 0);
 			break;
@@ -386,6 +409,7 @@ static void *session_stream_send_video_func(void *arg)
     pthread_detach(pthread_self());
 	msg_buffer_init2(&video_buff[sid], MSG_BUFFER_OVERFLOW_YES, &vmutex[sid]);
 	server_set_status(STATUS_TYPE_THREAD_START, (THREAD_VIDEO + sid), 1);
+	manager_common_send_dummy(SERVER_MISS);
     while( 1 ) {
     	pthread_rwlock_rdlock(&ilock);
     	if( info.exit || (misc_get_bit(info.thread_exit,  (THREAD_VIDEO + sid))) ) {
@@ -447,6 +471,7 @@ static void *session_stream_send_audio_func(void *arg)
     pthread_detach(pthread_self());
 	msg_buffer_init2(&audio_buff[sid], MSG_BUFFER_OVERFLOW_YES,&amutex[sid]);
 	server_set_status(STATUS_TYPE_THREAD_START, (THREAD_AUDIO + sid), 1);
+	manager_common_send_dummy(SERVER_MISS);
     while( 1 ) {
     	pthread_rwlock_rdlock(&ilock);
     	if( info.exit || ( misc_get_bit(info.thread_exit,  (THREAD_AUDIO + sid))) ) {
@@ -728,9 +753,7 @@ static int miss_clean_stream(session_node_t *psession_node)
 	message_t msg;
 	if( psession_node ) {
 		if( psession_node->source == SOURCE_LIVE) {
-			if( psession_node->video_status == STREAM_START ) {
-				psession_node->video_status = STREAM_NONE;
-				miss_helper_activate_stream(psession_node->id, 0);
+			if( miss_check_video_channel(psession_node) ) {
 				/********message body********/
 				msg_init(&msg);
 				msg.message = MSG_VIDEO_STOP;
@@ -738,9 +761,7 @@ static int miss_clean_stream(session_node_t *psession_node)
 				manager_common_send_message(SERVER_VIDEO, &msg);
 				/****************************/
 			}
-			if( psession_node->audio_status == STREAM_START ) {
-				psession_node->audio_status = STREAM_NONE;
-				miss_helper_activate_stream(psession_node->id, 1);
+			if( miss_check_audio_channel(psession_node) ) {
 				/********message body********/
 				msg_init(&msg);
 				msg.message = MSG_AUDIO_STOP;
@@ -748,24 +769,23 @@ static int miss_clean_stream(session_node_t *psession_node)
 				manager_common_send_message(SERVER_AUDIO, &msg);
 				/****************************/
 			}
-			psession_node->source = SOURCE_NONE;
 		}
 		else if( psession_node->source == SOURCE_PLAYER ) {
-			if( psession_node->video_status == STREAM_START ||
-				psession_node->audio_status == STREAM_START	) {
-				psession_node->video_status = STREAM_NONE;
-				psession_node->audio_status = STREAM_NONE;
-				miss_helper_activate_stream(psession_node->id, 0);
-				miss_helper_activate_stream(psession_node->id, 1);
+			if( miss_check_video_channel(psession_node) ||
+				miss_check_audio_channel(psession_node)	) {
 				/********message body********/
 				msg_init(&msg);
 				msg.message = MSG_PLAYER_STOP;
 				msg.sender = msg.receiver = SERVER_MISS;
-				manager_common_send_message(SERVER_PLAYER,    &msg);
+				manager_common_send_message(SERVER_PLAYER, &msg);
 				/****************************/
 			}
-			psession_node->source = SOURCE_NONE;
 		}
+		psession_node->video_status = STREAM_NONE;
+		psession_node->audio_status = STREAM_NONE;
+		psession_node->source = SOURCE_NONE;
+		miss_helper_activate_stream(psession_node->id, 0);
+		miss_helper_activate_stream(psession_node->id, 1);
 	}
 	return ret;
 }
@@ -1229,7 +1249,7 @@ int miss_cmd_video_ctrl(int session_id, miss_session_t *session,char *param)
 	if( node->source == SOURCE_LIVE ) {
 		/********message body********/
 		msg_init(&msg);
-		msg.message = MSG_VIDEO_PROPERTY_SET;
+		msg.message = MSG_VIDEO_PROPERTY_SET_EXT;
 		msg.sender = msg.receiver = SERVER_MISS;
 		msg.arg_in.cat = VIDEO_PROPERTY_QUALITY;
 		msg.arg_in.wolf = session_id;
@@ -1313,13 +1333,21 @@ int miss_cmd_player_ctrl(int session_id, miss_session_t *session, char *param)
 	}
 	ret = json_verify_get_int(msg, "speed", (int *)&speed);
 	if (ret < 0) {
-		speed = 1;
+		speed = 2;
 	} else {
-		if (speed != 1 && speed != 4 && speed != 16) {
-			log_qcy(DEBUG_INFO, "speed can only be 1/4/16 for now");
+		if ( speed!= 1 && speed != 2 && speed!=3 && speed != 4 ) {
+			log_qcy(DEBUG_INFO, "speed can only be 0.5/1/2/4 for now");
 				return -1;
 		}
 	}
+	if( speed == 1)
+		speed = 0;
+	else if( speed == 2)
+		speed = 1;
+	else if( speed == 3)
+		speed = 2;
+	else if( speed == 4)
+		speed = 4;
 	ret = json_verify_get_int(msg, "avchannelmerge", (int *)&avchannelmerge);
 	if (ret < 0) {
 		avchannelmerge = 0;
@@ -1353,6 +1381,7 @@ int miss_cmd_player_ctrl(int session_id, miss_session_t *session, char *param)
 		player[node->id].switch_to_live_audio = 1;
 		player[node->id].audio = 1;
 	}
+	player[node->id].start+=player[node->id].offset;	//offset
 	/********message body********/
 	msg_init(&message);
 	message.message = MSG_PLAYER_REQUEST;
@@ -1601,7 +1630,7 @@ static void session_task_live(session_node_t *node)
 	msg.arg_pass.wolf = session_id;
 	msg.arg_pass.handler = session;
 	/*****************************/
-//	log_qcy(DEBUG_INFO, "-----------live staus = %d, oldstatus = %d", node->task.old_status, node->task.status);
+	log_qcy(DEBUG_VERBOSE, "-----------live old_status = %d, status = %d", node->task.old_status, node->task.status);
 	node->task.old_status = node->task.status;
 	switch( node->task.status ){
 		case TASK_INIT: {
@@ -1614,15 +1643,15 @@ static void session_task_live(session_node_t *node)
 			break;
 		}
 		case TASK_WAIT: {
-			if( (node->audio_status != STREAM_NONE) || (node->video_status!=STREAM_NONE)) {
-				if( node->audio_status != STREAM_NONE ) {
+			if( miss_check_video_channel(node) || miss_check_video_channel(node) ) {
+				if( miss_check_audio_channel(node) ) {
 					if( node->source == SOURCE_LIVE ){
 						msg.message = MSG_AUDIO_STOP;
 						msg.arg_pass.cat = MISS_ASYN_AUDIO_STOP;
 						manager_common_send_message(SERVER_AUDIO, &msg);
 					}
 				}
-				if( node->video_status != STREAM_NONE ){
+				if( miss_check_video_channel(node) ){
 					if( node->source == SOURCE_LIVE ) {
 						msg.message = MSG_VIDEO_STOP;
 						msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
@@ -1657,9 +1686,9 @@ static void session_task_live(session_node_t *node)
 			break;
 		}
 		case TASK_IDLE:
-			if( (node->video_status == STREAM_START) ) {
+			if( miss_check_video_channel(node)==1 ) {
 				if( node->audio ) {
-					if( (node->audio_status == STREAM_START) ) {
+					if( miss_check_audio_channel(node)==1 ) {
 						node->task.status = TASK_RUN;
 						node->source = SOURCE_LIVE;
 					}
@@ -1698,12 +1727,13 @@ static void session_task_live(session_node_t *node)
 					}
 					node->video_switch = 0;
 					node->task.status = TASK_FINISH;
+					node->task.msg_lock = 1;
 				}
 			}
 			break;
 		}
 		case TASK_FINISH:
-			if( node->source == SOURCE_NONE) {
+			if( !miss_check_video_channel(node) && !miss_check_audio_channel(node) ) {
 				goto exit;
 			}
 			break;
@@ -1742,21 +1772,22 @@ static void session_task_playback(session_node_t *node)
 	msg.arg_pass.wolf = session_id;
 	msg.arg_pass.handler = session;
 	/*****************************/
+	log_qcy(DEBUG_VERBOSE, "-----------player old_staus = %d, status = %d", node->task.old_status, node->task.status);
 	node->task.old_status = node->task.status;
 	switch( node->task.status ){
 		case TASK_INIT: {
 			break;
 		}
 		case TASK_WAIT: {
-			if( (node->audio_status != STREAM_NONE) || (node->video_status!=STREAM_NONE)	) {
-				if( node->audio_status != STREAM_NONE) {
+			if( miss_check_video_channel(node) || miss_check_audio_channel(node)	) {
+				if( miss_check_audio_channel(node) ) {
 					if( node->source == SOURCE_LIVE ){
 						msg.message = MSG_AUDIO_STOP;
 						msg.arg_pass.cat = MISS_ASYN_AUDIO_STOP;
 						manager_common_send_message(SERVER_AUDIO, &msg);
 					}
 				}
-				if( (node->video_status!=STREAM_NONE) ) {
+				if( miss_check_video_channel(node) ) {
 					if( node->source == SOURCE_LIVE ){
 						msg.message = MSG_VIDEO_STOP;
 						msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
@@ -1789,37 +1820,48 @@ static void session_task_playback(session_node_t *node)
 					msg.message = MSG_PLAYER_START;
 					msg.arg_pass.cat = MISS_ASYN_PLAYER_START;
 					manager_common_send_message(SERVER_PLAYER, &msg);
-					node->video_switch = 0;
 				}
 				else{
 					msg.message = MSG_PLAYER_STOP;
 					msg.arg_pass.cat = MISS_ASYN_PLAYER_STOP;
 					manager_common_send_message(SERVER_PLAYER, &msg);
-					node->video_switch = 0;
-					goto exit;
+					node->task.status = TASK_FINISH2;
+					node->task.msg_lock = 1;
 				}
+				node->video_switch = 0;
 			}
 			break;
 		}
-		case TASK_FINISH:
-			goto exit2;
+		case TASK_FINISH:	//naturally finished
+			if( !miss_check_video_channel(node) && !miss_check_audio_channel(node) ) {
+				goto exit;
+			}
+			break;
+		case TASK_FINISH2: //user stopped
+			if( !miss_check_video_channel(node) && !miss_check_audio_channel(node) ) {
+				goto exit2;
+			}
 			break;
 		default:
 			log_qcy(DEBUG_SERIOUS, "!!!!!!!unprocessed server status in task_player = %d", node->task.status);
 			break;
 		}
 	return;
-exit:
+exit2:
 	node->task.func = session_task_none;
 	node->task.msg_lock = 0;
+	node->video = 0;
+	node->audio = 0;
 	log_qcy(DEBUG_INFO,"MISS: switch to default task!");
 	memset(&player[node->id], 0, sizeof(player_init_t));
 	return;
-exit2:
+exit:
 	if( player[node->id].switch_to_live ) {
-		node->video = node->video_switch = 1;
+//		node->video = node->video_switch = 1;
+//		node->video = 1;
 		if( player[node->id].switch_to_live_audio) {
 			node->audio = node->audio_switch = 1;
+			node->audio = 1;
 		}
 		node->task.status = TASK_INIT;
 		node->task.func = session_task_live;
@@ -1899,7 +1941,7 @@ static int miss_message_block_helper(void)
 		return 0;
 	}
 	if( !(node->task.msg_lock) ) {
-		log_qcy(DEBUG_VERBOSE, "===miss message block, return 0 when first message is not from session %p with msg_lock=1", msg.arg_in.handler);
+		log_qcy(DEBUG_VERBOSE, "===miss message block, return 0 when first message is msg_lock=0, session %p", msg.arg_in.handler);
 		return 0;
 	}
 	id = msg.message;
@@ -1916,7 +1958,7 @@ static int miss_message_block_helper(void)
 				msg_is_response(msg.message) ||
 									(node==NULL) ||
 										( node!=NULL && !(node->task.msg_lock) ) ) {	//find one behind system or response message
-			msg_buffer_swap_item(&message, 0, index);
+			msg_buffer_swap(&message, 0, index);
 			id1 = msg.message;
 			log_qcy(DEBUG_INFO, "MISS: swapped message happend, message %x was swapped with message %x", id, id1);
 			return 0;
@@ -2136,9 +2178,12 @@ static void task_exit(void)
 	switch( info.status ){
 		case EXIT_INIT:
 			log_qcy(DEBUG_INFO,"MISS: switch to exit task!");
-			info.error = MISS_EXIT_CONDITION;
 			if( info.task.msg.sender == SERVER_MANAGER) {
+				info.error = MISS_EXIT_CONDITION;
 				info.error &= (info.task.msg.arg_in.cat);
+			}
+			else {
+				info.error = 0;
 			}
 			info.status = EXIT_SERVER;
 			break;
