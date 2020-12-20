@@ -1381,7 +1381,7 @@ int miss_cmd_player_ctrl(int session_id, miss_session_t *session, char *param)
 		player[node->id].switch_to_live_audio = 1;
 		player[node->id].audio = 1;
 	}
-	player[node->id].start+=player[node->id].offset;	//offset
+//	player[node->id].start+=player[node->id].offset;	//offset
 	/********message body********/
 	msg_init(&message);
 	message.message = MSG_PLAYER_REQUEST;
