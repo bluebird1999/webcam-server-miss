@@ -37,12 +37,13 @@
 #include "../../tools/tools_interface.h"
 #include "../../server/miio/miio_interface.h"
 #include "../../server/miss/miss_interface.h"
-#include "../../server/video/video_interface.h"
 #include "../../server/audio/audio_interface.h"
 #include "../../server/realtek/realtek_interface.h"
 #include "../../server/player/player_interface.h"
 #include "../../server/speaker/speaker_interface.h"
 #include "../../server/device/device_interface.h"
+#include "../../server/video/video_interface.h"
+#include "../../server/video2/video2_interface.h"
 //server header
 #include "miss.h"
 #include "miss_interface.h"
@@ -244,7 +245,6 @@ static int miss_message_callback(message_t *arg)
 	int code;
 	char audio_format[16];
 	int temp;
-	message_t	msg;
 	session_node_t *pnod;
 	miss_session_t	*session;
 	pthread_rwlock_wrlock(&ilock);
@@ -263,8 +263,24 @@ static int miss_message_callback(message_t *arg)
 			pnod->video_frame = 0;
 			pthread_create(&pnod->video_tid, NULL, session_stream_send_video_func, (void*)pnod);
 			break;
+		case MISS_ASYN_VIDEO2_START:
+			log_qcy(DEBUG_INFO, "========start new video2 stream thread=========");
+			pnod->video_status = STREAM_START;
+			pnod->video_channel = arg->arg_pass.duck;
+			pnod->video_frame = 0;
+			pthread_create(&pnod->video_tid, NULL, session_stream_send_video_func, (void*)pnod);
+			break;
 		case MISS_ASYN_VIDEO_STOP:
 			log_qcy(DEBUG_INFO, "========stop  video stream thread=========");
+			pnod->video_tid = -1;
+			pnod->video_status = STREAM_NONE;
+			if( pnod->audio_status == STREAM_NONE )
+				pnod->source = SOURCE_NONE;
+			pnod->video_frame = 0;
+			miss_helper_activate_stream(pnod->id, 0);
+			break;
+		case MISS_ASYN_VIDEO2_STOP:
+			log_qcy(DEBUG_INFO, "========stop  video2 stream thread=========");
 			pnod->video_tid = -1;
 			pnod->video_status = STREAM_NONE;
 			if( pnod->audio_status == STREAM_NONE )
@@ -289,6 +305,7 @@ static int miss_message_callback(message_t *arg)
 			miss_helper_activate_stream(pnod->id, 1);
 			break;
 		case MISS_ASYN_VIDEO_CTRL:
+		case MISS_ASYN_VIDEO2_CTRL:
 			if( arg->result == 0) code = MISS_NO_ERROR;
 			else code = MISS_ERR_CLIENT_NO_SUPPORT;
 			ret = miss_cmd_send(session,MISS_CMD_STREAM_CTRL_RESP, (void*)&code, sizeof(int));
@@ -492,7 +509,8 @@ static void *session_stream_send_audio_func(void *arg)
     	msg_init(&msg);
     	ret = msg_buffer_pop(&audio_buff[sid], &msg);
     	pthread_mutex_unlock(&amutex[sid]);
-    	if( ret ) continue;
+    	if( ret )
+    		continue;
     	ret = session_send_audio_stream(node,(av_packet_t*)(msg.arg) );
     	msg_free(&msg);
     	if( ret == MISS_LOCAL_ERR_NO_DATA )  {
@@ -515,9 +533,13 @@ static int session_send_video_stream(session_node_t* node, av_packet_t *packet)
     miss_frame_header_t frame_info = {0};
     int ret;
     static int buffer_block = 0;
-    pthread_rwlock_rdlock(packet->lock);
-    if( ( *(packet->init) == 0 ) ||
-    	( packet->data == NULL ) ) {
+    pthread_rwlock_wrlock(packet->lock);
+    if( ( *(packet->init) == 0 ) ) {
+    	av_packet_sub(packet);
+    	pthread_rwlock_unlock(packet->lock);
+    	return MISS_LOCAL_ERR_NO_DATA;
+    }
+    if( ( packet->data == NULL ) ) {
     	pthread_rwlock_unlock(packet->lock);
     	return MISS_LOCAL_ERR_NO_DATA;
     }
@@ -566,9 +588,13 @@ static int session_send_audio_stream(session_node_t *node, av_packet_t *packet)
     miss_frame_header_t frame_info = {0};
     static int buffer_block = 0;
     int ret;
-    pthread_rwlock_rdlock(packet->lock);
-    if( ( *(packet->init) == 0 ) ||
-    	( packet->data == NULL ) ) {
+    pthread_rwlock_wrlock(packet->lock);
+    if( ( *(packet->init) == 0 ) ) {
+    	av_packet_sub(packet);
+    	pthread_rwlock_unlock(packet->lock);
+    	return MISS_LOCAL_ERR_NO_DATA;
+    }
+    if( ( packet->data == NULL ) ) {
     	pthread_rwlock_unlock(packet->lock);
     	return MISS_LOCAL_ERR_NO_DATA;
     }
@@ -917,6 +943,9 @@ static int miss_session_status(message_t *msg)
     	    miss_list_add_tail(&(session_node->list), &(client_session.head));
     	    //***initial
     	    session_node->task.func = session_task_none;
+    	    session_node->video_channel = 0;
+    	    session_node->audio_channel = 0;
+    	    session_node->video_channel_req = 0;
     		//user data
     	    pSession_valu = malloc(sizeof(int));
     	    *pSession_valu = sid;
@@ -1247,20 +1276,40 @@ int miss_cmd_video_ctrl(int session_id, miss_session_t *session,char *param)
 		return MISS_LOCAL_ERR_SESSION_GONE;
 	}
 	if( node->source == SOURCE_LIVE ) {
-		/********message body********/
-		msg_init(&msg);
-		msg.message = MSG_VIDEO_PROPERTY_SET_EXT;
-		msg.sender = msg.receiver = SERVER_MISS;
-		msg.arg_in.cat = VIDEO_PROPERTY_QUALITY;
-		msg.arg_in.wolf = session_id;
-		msg.arg_in.handler = session;
-		msg.arg = &vq;
-		msg.arg_size = sizeof(vq);
-		msg.arg_pass.cat = MISS_ASYN_VIDEO_CTRL;
-		msg.arg_pass.wolf = session_id;
-		msg.arg_pass.handler = session;
-		server_video_message(&msg);
-		/****************************/
+		if( node->video_channel == 1 ) { //only change quality when the video is of channel 1
+			if( vq != 2) { // only if the vq request is not 1080p
+				/********message body********/
+/*				msg_init(&msg);
+				msg.sender = msg.receiver = SERVER_MISS;
+				msg.message = MSG_VIDEO2_PROPERTY_SET_EXT;
+				msg.arg_in.cat = VIDEO2_PROPERTY_QUALITY;
+				msg.arg_in.wolf = session_id;
+				msg.arg_in.handler = session;
+				msg.arg = &vq;
+				msg.arg_size = sizeof(vq);
+				msg.arg_pass.cat = MISS_ASYN_VIDEO2_CTRL;
+				msg.arg_pass.wolf = session_id;
+				msg.arg_pass.handler = session;
+				server_video2_message(&msg);
+*/
+				/****************************/
+			}
+			else { //vq == 2
+				node->video_channel_req = 0;
+				node->task.status = TASK_INIT;
+				node->task.func = session_task_live;
+				node->task.msg_lock = 1;
+			}
+		}
+		else if( node->video_channel == 0) {
+			if( vq != 2) {
+				node->video_channel_req = 1;
+				node->task.status = TASK_INIT;
+				node->task.func = session_task_live;
+				node->task.msg_lock = 1;
+			}
+		}
+
 	}
 	pthread_rwlock_unlock(&ilock);
     return 0;
@@ -1391,7 +1440,7 @@ int miss_cmd_player_ctrl(int session_id, miss_session_t *session, char *param)
 	message.arg_pass.cat = MISS_ASYN_PLAYER_REQUEST;
 	message.arg_pass.wolf = node->id;
 	message.arg_pass.handler = session;
-	message.arg_pass.duck = 0;
+	message.arg_pass.duck = 2;
 	message.arg = &player[node->id];
 	message.arg_size = sizeof(player_init_t);
 	manager_common_send_message(SERVER_PLAYER, &message);
@@ -1409,8 +1458,8 @@ int miss_cmd_player_set_speed(int session_id, miss_session_t *session, char *par
 	if (ret < 0) {
 		speed = 1;
 	} else {
-		if (speed != 1 && speed != 4 && speed != 16) {
-			log_qcy(DEBUG_WARNING, "speed can only be 1/4/16 for now");
+		if (speed != 1 && speed != 2 && speed != 3 && speed != 4 ) {
+			log_qcy(DEBUG_WARNING, "speed can only be 1/2/3/4 for now");
 				return -1;
 		}
 	}
@@ -1616,7 +1665,6 @@ static void session_task_none(session_node_t *node)
  */
 static void session_task_live(session_node_t *node)
 {
-	int ret = 0;
 	int session_id;
     message_t msg;
 	miss_session_t *session;
@@ -1635,11 +1683,13 @@ static void session_task_live(session_node_t *node)
 	switch( node->task.status ){
 		case TASK_INIT: {
 			log_qcy(DEBUG_INFO,"MISS: switch to live task!");
-			if( node->source == SOURCE_NONE) {
+			if( (node->source == SOURCE_NONE) &&
+					(node->video_channel == node->video_channel_req) ) {
 				node->task.status = TASK_SETUP;
 			}
-			else
+			else {
 				node->task.status = TASK_WAIT;
+			}
 			break;
 		}
 		case TASK_WAIT: {
@@ -1653,9 +1703,16 @@ static void session_task_live(session_node_t *node)
 				}
 				if( miss_check_video_channel(node) ){
 					if( node->source == SOURCE_LIVE ) {
-						msg.message = MSG_VIDEO_STOP;
-						msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
-						manager_common_send_message(SERVER_VIDEO, &msg);
+						if( node->video_channel == 0) {
+							msg.message = MSG_VIDEO_STOP;
+							msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
+							manager_common_send_message(SERVER_VIDEO, &msg);
+						}
+						else if( node->video_channel == 1) {
+							msg.message = MSG_VIDEO2_STOP;
+							msg.arg_pass.cat = MISS_ASYN_VIDEO2_STOP;
+							manager_common_send_message(SERVER_VIDEO2, &msg);
+						}
 					}
 					else if( node->source == SOURCE_PLAYER) {
 						msg.message = MSG_PLAYER_STOP;
@@ -1665,16 +1722,25 @@ static void session_task_live(session_node_t *node)
 				}
 			}
 			else {
+				if( node->video_channel != node->video_channel_req )
+					node->video_channel = node->video_channel_req;
 				node->task.status = TASK_SETUP;
 			}
 			break;
 		}
 		case TASK_SETUP: {
-		    /********message body********/
-			msg.message = MSG_VIDEO_START;
-	    	msg.arg_pass.duck = 0;
-	    	msg.arg_pass.cat = MISS_ASYN_VIDEO_START;
-	        manager_common_send_message(SERVER_VIDEO, &msg);
+			if( node->video_channel == 0 ) {
+				msg.message = MSG_VIDEO_START;
+				msg.arg_pass.duck = 0;
+				msg.arg_pass.cat = MISS_ASYN_VIDEO_START;
+				manager_common_send_message(SERVER_VIDEO, &msg);
+			}
+			else if( node->video_channel == 1 ) {
+				msg.message = MSG_VIDEO2_START;
+				msg.arg_pass.duck = 1;
+				msg.arg_pass.cat = MISS_ASYN_VIDEO2_START;
+				manager_common_send_message(SERVER_VIDEO2, &msg);
+			}
 	        if( node->audio) {
 				/********message body********/
 				msg.message = MSG_AUDIO_START;
@@ -1717,9 +1783,16 @@ static void session_task_live(session_node_t *node)
 			}
 			if( node->video_switch ){
 				if( !node->video ) {
-					msg.message = MSG_VIDEO_STOP;
-					msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
-					manager_common_send_message(SERVER_VIDEO, &msg);
+					if( node->video_channel == 0 ) {
+						msg.message = MSG_VIDEO_STOP;
+						msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
+						manager_common_send_message(SERVER_VIDEO, &msg);
+					}
+					else if( node->video_channel == 1 ) {
+						msg.message = MSG_VIDEO2_STOP;
+						msg.arg_pass.cat = MISS_ASYN_VIDEO2_STOP;
+						manager_common_send_message(SERVER_VIDEO2, &msg);
+					}
 					if( node->audio ) {
 						msg.message = MSG_AUDIO_STOP;
 						msg.arg_pass.cat = MISS_ASYN_AUDIO_STOP;
@@ -1758,7 +1831,6 @@ exit:
  */
 static void session_task_playback(session_node_t *node)
 {
-	int ret = 0;
 	int session_id;
     message_t msg;
 	miss_session_t *session;
@@ -1789,9 +1861,16 @@ static void session_task_playback(session_node_t *node)
 				}
 				if( miss_check_video_channel(node) ) {
 					if( node->source == SOURCE_LIVE ){
-						msg.message = MSG_VIDEO_STOP;
-						msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
-						manager_common_send_message(SERVER_VIDEO, &msg);
+						if( node->video_channel == 0) {
+							msg.message = MSG_VIDEO_STOP;
+							msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
+							manager_common_send_message(SERVER_VIDEO, &msg);
+						}
+						else if( node->video_channel == 1) {
+							msg.message = MSG_VIDEO2_STOP;
+							msg.arg_pass.cat = MISS_ASYN_VIDEO2_STOP;
+							manager_common_send_message(SERVER_VIDEO2, &msg);
+						}
 					}
 				}
 			}
@@ -2033,8 +2112,10 @@ static int server_message_proc(void)
 		case MSG_MIIO_MISSRPC_ERROR:
 			break;
 		case MSG_VIDEO_START_ACK:
+		case MSG_VIDEO2_START_ACK:
 		case MSG_PLAYER_START_ACK:
 		case MSG_VIDEO_STOP_ACK:
+		case MSG_VIDEO2_STOP_ACK:
 		case MSG_PLAYER_STOP_ACK:
 		case MSG_AUDIO_START_ACK:
 		case MSG_PLAYER_AUDIO_START_ACK:
@@ -2044,6 +2125,10 @@ static int server_message_proc(void)
 		case MSG_VIDEO_PROPERTY_SET_ACK:
 		case MSG_VIDEO_PROPERTY_SET_EXT_ACK:
 		case MSG_VIDEO_PROPERTY_SET_DIRECT_ACK:
+		case MSG_VIDEO2_PROPERTY_GET_ACK:
+		case MSG_VIDEO2_PROPERTY_SET_ACK:
+		case MSG_VIDEO2_PROPERTY_SET_EXT_ACK:
+		case MSG_VIDEO2_PROPERTY_SET_DIRECT_ACK:
 		case MSG_PLAYER_PROPERTY_SET_ACK:
 		case MSG_SPEAKER_CTL_PLAY_ACK:
 		case MSG_PLAYER_REQUEST_ACK:

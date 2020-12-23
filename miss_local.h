@@ -74,12 +74,13 @@ typedef struct session_node_t{
     pthread_t audio_tid;
     stream_status_t	video_status;
     stream_status_t	audio_status;
-    int	video_channel;
-    int audio_channel;
-    int video_frame;
-    int audio_frame;
     struct list_handle 		list;
     stream_source_type_t	source;
+    int				video_channel;
+    int				video_channel_req;
+    int 			audio_channel;
+    int 			video_frame;
+    int 			audio_frame;
     char			lock;
     char			video_switch;
     char			video;

@@ -228,7 +228,7 @@ void miss_on_rdt_data(miss_session_t *session, void *rdt_data, uint32_t length, 
 	msg.arg_pass.handler = (void*)session;
 	if( user_data ) {
 		msg.arg_in.wolf = *(int*)user_data;
-		msg.arg_in.wolf = *(int*)user_data;
+		msg.arg_pass.wolf = *(int*)user_data;
 	}
 	manager_common_send_message(SERVER_MISS,   &msg);
     return;
