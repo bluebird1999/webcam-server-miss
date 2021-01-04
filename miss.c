@@ -32,7 +32,9 @@
 #include <rtsvideo.h>
 #include <rtsaudio.h>
 #include <malloc.h>
-
+#ifdef DMALLOC_ENABLE
+#include <dmalloc.h>
+#endif
 //program header
 #include "../../manager/manager_interface.h"
 #include "../../tools/tools_interface.h"
@@ -85,6 +87,7 @@ static void server_release_2(void);
 static void server_release_3(void);
 static int server_set_status(int type, int st, int value);
 static void server_thread_termination(void);
+static int server_restart(void);
 //specific
 static int miss_server_connect(void);
 static int miss_server_disconnect(void);
@@ -534,7 +537,7 @@ static int session_send_video_stream(session_node_t* node, av_packet_t *packet)
     miss_frame_header_t frame_info = {0};
     int ret;
     static int buffer_block = 0;
-    pthread_rwlock_wrlock(packet->lock);
+    pthread_rwlock_rdlock(packet->lock);
     if( ( *(packet->init) == 0 ) ) {
     	av_packet_sub(packet);
     	pthread_rwlock_unlock(packet->lock);
@@ -589,7 +592,7 @@ static int session_send_audio_stream(session_node_t *node, av_packet_t *packet)
     miss_frame_header_t frame_info = {0};
     static int buffer_block = 0;
     int ret;
-    pthread_rwlock_wrlock(packet->lock);
+    pthread_rwlock_rdlock(packet->lock);
     if( ( *(packet->init) == 0 ) ) {
     	av_packet_sub(packet);
     	pthread_rwlock_unlock(packet->lock);
@@ -925,6 +928,7 @@ static int miss_session_status(message_t *msg)
     		sid = miss_session_check(session);
     	    if( sid == SESSION_FULL) {
     	    	log_qcy(DEBUG_WARNING, "use_session_num:%d max:%d!", client_session.use_session_num, MAX_SESSION_NUMBER);
+    	    	miss_server_session_close(session);
     	    	pthread_rwlock_unlock(&ilock);
     	    	break;
     	    }
@@ -936,6 +940,7 @@ static int miss_session_status(message_t *msg)
     	    session_node = malloc(sizeof(session_node_t));
     	    if(!session_node) {
     	        log_qcy(DEBUG_SERIOUS, "session add malloc error");
+    	        miss_server_session_close(session);
     	        pthread_rwlock_unlock(&ilock);
     	        break;
     	    }
@@ -957,9 +962,9 @@ static int miss_session_status(message_t *msg)
     	    pthread_rwlock_unlock(&ilock);
     		break;
     	case SESSION_STATUS_REMOVE:
+    		pthread_rwlock_wrlock(&ilock);
+	    	session = (miss_session_t*)msg->arg_in.handler;
     	    if( error != MISS_ERR_CLOSE_BY_LOCAL) {
-    	    	pthread_rwlock_wrlock(&ilock);
-    	    	session = (miss_session_t*)msg->arg_in.handler;
     	        list_for_each(post, &(client_session.head)) {
     	            session_node = list_entry(post, session_node_t, list);
     	            if(session_node && session_node->session == session) {
@@ -971,14 +976,19 @@ static int miss_session_status(message_t *msg)
     	                break;
     	            }
     	        }
-    	        pthread_rwlock_unlock(&ilock);
     	    }
+	        miss_server_session_close(session);
     	    if(msg->arg) {
     		    log_qcy(DEBUG_INFO, "miss disconnect user_data:%p\n", msg->arg);
     		    free(msg->arg);
     		}
+	        pthread_rwlock_unlock(&ilock);
     		break;
     	case SESSION_STATUS_ERROR:
+    		if (msg->arg_in.dog == MISS_ERR_TIMOUT || msg->arg_in.dog == MISS_ERR_ABORTED) {
+    			log_qcy(DEBUG_INFO, "miss_server_finish() by errorcode:%d\n",msg->arg_in.dog);
+    			server_restart();
+    		}
     		log_qcy(DEBUG_INFO, "miss session %p and error =%d\n", msg->arg_in.handler, msg->arg_in.dog);
     		break;
     	default:

@@ -11,7 +11,9 @@
 //system header
 #include <stdio.h>
 #include <malloc.h>
-
+#ifdef DMALLOC_ENABLE
+#include <dmalloc.h>
+#endif
 //program header
 
 //server header
