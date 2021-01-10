@@ -16,7 +16,7 @@
 /*
  * define
  */
-#define		SERVER_MISS_VERSION_STRING			"alpha-5.2"
+#define		SERVER_MISS_VERSION_STRING			"alpha-7.0"
 
 #define		MSG_MISS_BASE						(SERVER_MISS<<16)
 #define		MSG_MISS_SIGINT						(MSG_MISS_BASE | 0x0000)
@@ -66,6 +66,7 @@
 #define		MISS_LOCAL_ERR_SESSION_GONE		130
 #define		MISS_LOCAL_ERR_AV_NOT_RUN		131
 #define		MISS_LOCAL_ERR_PARAM			132
+#define		MISS_LOCAL_ERR_MSG_BUFF_FULL	133
 /*
  * structure
  */
