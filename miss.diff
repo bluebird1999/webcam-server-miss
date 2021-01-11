@@ -1,0 +1,497 @@
+diff --git a/miss.c b/miss.c
+index b3c7ffb..8d93158 100644
+--- a/miss.c
++++ b/miss.c
+@@ -91,8 +91,8 @@ static int server_restart(void);
+ //specific
+ static int miss_server_connect(void);
+ static int miss_server_disconnect(void);
+-static int session_send_video_stream(session_node_t* node, av_packet_t *packet);
+-static int session_send_audio_stream(session_node_t* node, av_packet_t *packet);
++static int session_send_video_stream(session_node_t* node, message_t *msg);
++static int session_send_audio_stream(session_node_t* node, message_t *msg);
+ static session_node_t *miss_session_check_node(miss_session_t *session);
+ static miss_session_t *miss_session_get_node_id(int sid);
+ static void *session_stream_send_audio_func(void *arg);
+@@ -428,7 +428,7 @@ static void *session_stream_send_video_func(void *arg)
+     signal(SIGTERM, server_thread_termination);
+     misc_set_thread_name(fname);
+     pthread_detach(pthread_self());
+-	msg_buffer_init2(&video_buff[sid], MSG_BUFFER_OVERFLOW_YES, &vmutex[sid]);
++	msg_buffer_init2(&video_buff[sid], _config_.miss_avmsg_overrun, &vmutex[sid]);
+ 	server_set_status(STATUS_TYPE_THREAD_START, (THREAD_VIDEO + sid), 1);
+ 	manager_common_send_dummy(SERVER_MISS);
+     while( 1 ) {
+@@ -453,7 +453,7 @@ static void *session_stream_send_video_func(void *arg)
+     	ret = msg_buffer_pop(&video_buff[sid], &msg);
+     	pthread_mutex_unlock(&vmutex[sid]);
+     	if( ret ) continue;
+-    	ret = session_send_video_stream(node,(av_packet_t*)(msg.arg));
++    	ret = session_send_video_stream(node, &msg);
+     	msg_free(&msg);
+     	if( ret == MISS_LOCAL_ERR_NO_DATA ) {
+     		continue;
+@@ -490,7 +490,7 @@ static void *session_stream_send_audio_func(void *arg)
+     signal(SIGTERM, server_thread_termination);
+     misc_set_thread_name(fname);
+     pthread_detach(pthread_self());
+-	msg_buffer_init2(&audio_buff[sid], MSG_BUFFER_OVERFLOW_YES,&amutex[sid]);
++	msg_buffer_init2(&audio_buff[sid], _config_.miss_avmsg_overrun, &amutex[sid]);
+ 	server_set_status(STATUS_TYPE_THREAD_START, (THREAD_AUDIO + sid), 1);
+ 	manager_common_send_dummy(SERVER_MISS);
+     while( 1 ) {
+@@ -515,7 +515,7 @@ static void *session_stream_send_audio_func(void *arg)
+     	pthread_mutex_unlock(&amutex[sid]);
+     	if( ret )
+     		continue;
+-    	ret = session_send_audio_stream(node,(av_packet_t*)(msg.arg) );
++    	ret = session_send_audio_stream(node, &msg );
+     	msg_free(&msg);
+     	if( ret == MISS_LOCAL_ERR_NO_DATA )  {
+     		continue;
+@@ -532,32 +532,44 @@ exit:
+     pthread_exit(0);
+ }
+ 
+-static int session_send_video_stream(session_node_t* node, av_packet_t *packet)
++static int session_send_video_stream(session_node_t* node, message_t *msg)
+ {
+     miss_frame_header_t frame_info = {0};
+     int ret;
+     static int buffer_block = 0;
+-    pthread_rwlock_rdlock(packet->lock);
+-    if( ( *(packet->init) == 0 ) ) {
+-    	av_packet_sub(packet);
+-    	pthread_rwlock_unlock(packet->lock);
+-    	return MISS_LOCAL_ERR_NO_DATA;
++    unsigned char *data;
++    av_packet_t *packet;
++    av_data_info_t	*info;
++    if( _config_.memory_mode == MEMORY_MODE_SHARED ) {
++		packet = (av_packet_t*)(msg->arg);
++		data = (unsigned char*)packet->data;
++		info = (av_data_info_t*)(&packet->info);
++		pthread_rwlock_wrlock(packet->lock);
++		if( ( *(packet->init) == 0 ) ) {
++			av_packet_sub(packet);
++			pthread_rwlock_unlock(packet->lock);
++			return MISS_LOCAL_ERR_NO_DATA;
++		}
++		if( data == NULL ) {
++			pthread_rwlock_unlock(packet->lock);
++			return MISS_LOCAL_ERR_NO_DATA;
++		}
+     }
+-    if( ( packet->data == NULL ) ) {
+-    	pthread_rwlock_unlock(packet->lock);
+-    	return MISS_LOCAL_ERR_NO_DATA;
++    else {
++    	data = (unsigned char*)msg->arg;
++    	info = (av_data_info_t*)msg->extra;
+     }
+-    frame_info.timestamp = packet->info.timestamp;
+-    frame_info.timestamp_s = packet->info.timestamp/1000;
+-    frame_info.sequence = packet->info.frame_index;
+-    frame_info.length = packet->info.size;
+-    frame_info.codec_id = MISS_CODEC_VIDEO_H264;
+-    frame_info.flags = packet->info.flag;
++	frame_info.timestamp = info->timestamp;
++	frame_info.timestamp_s = info->timestamp/1000;
++	frame_info.sequence = info->frame_index;
++	frame_info.length = info->size;
++	frame_info.codec_id = MISS_CODEC_VIDEO_H264;
++	frame_info.flags = info->flag;
+ 	if( (node->video_frame == 0) && (node->audio_frame==0)) {
+ 		miss_session_query(node->session, MISS_QUERY_CMD_SEND_CLEAR_BUFFER, NULL);
+ 		log_qcy(DEBUG_INFO, "clear buffer before send new stream!");
+ 	}
+-	ret = miss_video_send(node->session, &frame_info, (unsigned char*)(packet->data));
++	ret = miss_video_send(node->session, &frame_info, data);
+ 	if ( ret !=0 ) {
+ 		log_qcy(DEBUG_VERBOSE, "send miss-video data error: %d, size: %d", ret, frame_info.length);
+ 		if( ret == MISS_ERR_NO_BUFFER ) {
+@@ -582,38 +594,52 @@ static int session_send_video_stream(session_node_t* node, av_packet_t *packet)
+ 		node->video_frame++;
+ 		buffer_block = 0;
+ 	}
+-	av_packet_sub(packet);
+-	pthread_rwlock_unlock(packet->lock);
++	if( _config_.memory_mode == MEMORY_MODE_SHARED) {
++		av_packet_sub(packet);
++		pthread_rwlock_unlock(packet->lock);
++	}
+     return ret;
+ }
+ 
+-static int session_send_audio_stream(session_node_t *node, av_packet_t *packet)
++static int session_send_audio_stream(session_node_t *node, message_t *msg)
+ {
+     miss_frame_header_t frame_info = {0};
+     static int buffer_block = 0;
+     int ret;
+-    pthread_rwlock_rdlock(packet->lock);
+-    if( ( *(packet->init) == 0 ) ) {
+-    	av_packet_sub(packet);
+-    	pthread_rwlock_unlock(packet->lock);
+-    	return MISS_LOCAL_ERR_NO_DATA;
++    unsigned char *data;
++    av_packet_t *packet;
++    av_data_info_t	*info;
++    if( _config_.memory_mode == MEMORY_MODE_SHARED ) {
++		packet = (av_packet_t*)(msg->arg);
++		data = (unsigned char*)packet->data;
++		info = (av_data_info_t*)(&packet->info);
++		pthread_rwlock_wrlock(packet->lock);
++		if( ( *(packet->init) == 0 ) ) {
++			av_packet_sub(packet);
++			pthread_rwlock_unlock(packet->lock);
++			return MISS_LOCAL_ERR_NO_DATA;
++		}
++		if( data == NULL ) {
++			pthread_rwlock_unlock(packet->lock);
++			return MISS_LOCAL_ERR_NO_DATA;
++		}
+     }
+-    if( ( packet->data == NULL ) ) {
+-    	pthread_rwlock_unlock(packet->lock);
+-    	return MISS_LOCAL_ERR_NO_DATA;
++    else {
++    	data = (unsigned char*)msg->arg;
++    	info = (av_data_info_t*)msg->extra;
+     }
+-    frame_info.timestamp = packet->info.timestamp;
+-    frame_info.timestamp_s = packet->info.timestamp/1000;
+-    frame_info.sequence = packet->info.frame_index;
+-    frame_info.length = packet->info.size;
++    frame_info.timestamp = info->timestamp;
++    frame_info.timestamp_s = info->timestamp/1000;
++    frame_info.sequence = info->frame_index;
++    frame_info.length = info->size;
+     frame_info.codec_id = MISS_CODEC_AUDIO_G711A;
+-    frame_info.flags = packet->info.flag;
++    frame_info.flags = info->flag;
+ 	//send stream to miss
+ 	if( (node->video_frame == 0) && (node->audio_frame==0)) {
+ 		miss_session_query(node->session, MISS_QUERY_CMD_SEND_CLEAR_BUFFER, NULL);
+ 		log_qcy(DEBUG_INFO, "clear buffer before send new stream!");
+ 	}
+-	ret = miss_video_send(node->session, &frame_info, (unsigned char*)(packet->data));
++	ret = miss_video_send(node->session, &frame_info, data);
+ 	if ( ret !=0 ) {
+ 		log_qcy(DEBUG_VERBOSE, "send miss-audio data error: %d, size: %d", ret, frame_info.length);
+ 		if( ret == MISS_ERR_NO_BUFFER ) {
+@@ -631,8 +657,10 @@ static int session_send_audio_stream(session_node_t *node, av_packet_t *packet)
+ 		node->audio_frame++;
+ 		buffer_block = 0;
+ 	}
+-	av_packet_sub(packet);
+-	pthread_rwlock_unlock(packet->lock);
++	if( _config_.memory_mode == MEMORY_MODE_SHARED) {
++		av_packet_sub(packet);
++		pthread_rwlock_unlock(packet->lock);
++	}
+     return ret;
+ }
+ 
+@@ -738,8 +766,8 @@ static int miss_server_connect(void)
+ 	dev.did = did;
+ 	dev.did_len = strlen(did);
+ 	miss_log_set_level(MISS_LOG_DEBUG);
+-	sprintf(fname,"%slog/miss.log", config.profile.log_path);
+-	miss_log_set_path(CONFIG_MISS_LOG_PATH);
++	sprintf(fname,"%smiss.log", config.profile.log_path);
++	miss_log_set_path(fname);
+ 	ret = miss_server_init(&dev, &server);
+ 	if (MISS_NO_ERROR != ret) {
+         log_qcy(DEBUG_SERIOUS, "miss server init fail ret:%d", ret);
+@@ -1039,6 +1067,7 @@ int miss_cmd_video_start(int session_id, miss_session_t *session, char *param)
+ 	}
+ 	if( ( node->video_status != STREAM_NONE) ) {
+ 		log_qcy(DEBUG_WARNING, "miss: video thread is already running! %p %d", session, session_id);
++		node->video = 1;
+ 		pthread_rwlock_unlock(&ilock);
+ 		return MISS_LOCAL_ERR_AV_NOT_RUN;
+ 	}
+@@ -1065,6 +1094,7 @@ int miss_cmd_video_stop(int session_id, miss_session_t *session,char *param)
+ 	}
+ 	if( ( node->video_status != STREAM_START) ) {
+ 		log_qcy(DEBUG_WARNING, "miss: video thread is not running! %p %d", session, session_id);
++		node->video = 0;
+ 		pthread_rwlock_unlock(&ilock);
+ 		return MISS_LOCAL_ERR_AV_NOT_RUN;
+ 	}
+@@ -1086,6 +1116,7 @@ int miss_cmd_audio_start(int session_id, miss_session_t *session,char *param)
+ 	}
+ 	if( ( node->audio_status != STREAM_NONE) ) {
+ 		log_qcy(DEBUG_WARNING, "miss: audio thread is already running! %p %d", session, session_id);
++		node->audio = 1;
+ 		pthread_rwlock_unlock(&ilock);
+ 		return MISS_LOCAL_ERR_AV_NOT_RUN;
+ 	}
+@@ -1107,6 +1138,7 @@ int miss_cmd_audio_stop(int session_id, miss_session_t *session,char *param)
+ 	}
+ 	if( ( node->audio_status != STREAM_START) ) {
+ 		log_qcy(DEBUG_WARNING, "miss: audio thread is not running! %p %d", session, session_id);
++		node->audio = 0;
+ 		pthread_rwlock_unlock(&ilock);
+ 		return MISS_LOCAL_ERR_AV_NOT_RUN;
+ 	}
+@@ -1700,40 +1732,43 @@ static void session_task_live(session_node_t *node)
+ 				node->task.status = TASK_SETUP;
+ 			}
+ 			else {
+-				node->task.status = TASK_WAIT;
+-			}
+-			break;
+-		}
+-		case TASK_WAIT: {
+-			if( miss_check_video_channel(node) || miss_check_video_channel(node) ) {
+-				if( miss_check_audio_channel(node) ) {
+-					if( node->source == SOURCE_LIVE ){
+-						msg.message = MSG_AUDIO_STOP;
+-						msg.arg_pass.cat = MISS_ASYN_AUDIO_STOP;
+-						manager_common_send_message(SERVER_AUDIO, &msg);
++				if( miss_check_video_channel(node) || miss_check_audio_channel(node) ) {
++					if( miss_check_audio_channel(node) ) {
++						if( node->source == SOURCE_LIVE ){
++							log_qcy(DEBUG_INFO,"MISS: MSG_AUDIO_STOP");
++							msg.message = MSG_AUDIO_STOP;
++							msg.arg_pass.cat = MISS_ASYN_AUDIO_STOP;
++							manager_common_send_message(SERVER_AUDIO, &msg);
++						}
+ 					}
+-				}
+-				if( miss_check_video_channel(node) ){
+-					if( node->source == SOURCE_LIVE ) {
+-						if( node->video_channel == 0) {
+-							msg.message = MSG_VIDEO_STOP;
+-							msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
+-							manager_common_send_message(SERVER_VIDEO, &msg);
++					if( miss_check_video_channel(node) ){
++						if( node->source == SOURCE_LIVE ) {
++							if( node->video_channel == 0) {
++								log_qcy(DEBUG_INFO,"MISS: MSG_VIDEO_STOP");
++								msg.message = MSG_VIDEO_STOP;
++								msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
++								manager_common_send_message(SERVER_VIDEO, &msg);
++							}
++							else if( node->video_channel == 1) {
++								log_qcy(DEBUG_INFO,"MISS: MSG_VIDEO2_STOP");
++								msg.message = MSG_VIDEO2_STOP;
++								msg.arg_pass.cat = MISS_ASYN_VIDEO2_STOP;
++								manager_common_send_message(SERVER_VIDEO2, &msg);
++							}
+ 						}
+-						else if( node->video_channel == 1) {
+-							msg.message = MSG_VIDEO2_STOP;
+-							msg.arg_pass.cat = MISS_ASYN_VIDEO2_STOP;
+-							manager_common_send_message(SERVER_VIDEO2, &msg);
++						else if( node->source == SOURCE_PLAYER) {
++							msg.message = MSG_PLAYER_STOP;
++							msg.arg_pass.cat = MISS_ASYN_PLAYER_STOP;
++							manager_common_send_message(SERVER_PLAYER, &msg);
+ 						}
+ 					}
+-					else if( node->source == SOURCE_PLAYER) {
+-						msg.message = MSG_PLAYER_STOP;
+-						msg.arg_pass.cat = MISS_ASYN_PLAYER_STOP;
+-						manager_common_send_message(SERVER_PLAYER, &msg);
+-					}
+ 				}
++				node->task.status = TASK_WAIT;
+ 			}
+-			else {
++			break;
++		}
++		case TASK_WAIT: {
++			if( !miss_check_video_channel(node) && !miss_check_audio_channel(node) ) {
+ 				if( node->video_channel != node->video_channel_req )
+ 					node->video_channel = node->video_channel_req;
+ 				node->task.status = TASK_SETUP;
+@@ -1742,18 +1777,21 @@ static void session_task_live(session_node_t *node)
+ 		}
+ 		case TASK_SETUP: {
+ 			if( node->video_channel == 0 ) {
++				log_qcy(DEBUG_INFO,"MISS: MSG_VIDEO_START");
+ 				msg.message = MSG_VIDEO_START;
+ 				msg.arg_pass.duck = 0;
+ 				msg.arg_pass.cat = MISS_ASYN_VIDEO_START;
+ 				manager_common_send_message(SERVER_VIDEO, &msg);
+ 			}
+ 			else if( node->video_channel == 1 ) {
++				log_qcy(DEBUG_INFO,"MISS: MSG_VIDEO2_START");
+ 				msg.message = MSG_VIDEO2_START;
+ 				msg.arg_pass.duck = 1;
+ 				msg.arg_pass.cat = MISS_ASYN_VIDEO2_START;
+ 				manager_common_send_message(SERVER_VIDEO2, &msg);
+ 			}
+ 	        if( node->audio) {
++	        	log_qcy(DEBUG_INFO,"MISS: MSG_AUDIO_START");
+ 				/********message body********/
+ 				msg.message = MSG_AUDIO_START;
+ 				msg.arg_pass.cat = MISS_ASYN_AUDIO_START;
+@@ -1782,12 +1820,14 @@ static void session_task_live(session_node_t *node)
+ 				node->task.msg_lock = 0;
+ 			if( node->audio_switch ){
+ 				if( node->audio ) {
++					log_qcy(DEBUG_INFO,"MISS: MSG_AUDIO_START");
+ 					msg.message = MSG_AUDIO_START;
+ 					msg.arg_pass.cat = MISS_ASYN_AUDIO_START;
+ 					manager_common_send_message(SERVER_AUDIO, &msg);
+ 				}
+ 				else{
+ 					msg.message = MSG_AUDIO_STOP;
++					log_qcy(DEBUG_INFO,"MISS: MSG_AUDIO_STOP");
+ 					msg.arg_pass.cat = MISS_ASYN_AUDIO_STOP;
+ 					manager_common_send_message(SERVER_AUDIO, &msg);
+ 				}
+@@ -1796,16 +1836,19 @@ static void session_task_live(session_node_t *node)
+ 			if( node->video_switch ){
+ 				if( !node->video ) {
+ 					if( node->video_channel == 0 ) {
++						log_qcy(DEBUG_INFO,"MISS: MSG_VIDEO_STOP");
+ 						msg.message = MSG_VIDEO_STOP;
+ 						msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
+ 						manager_common_send_message(SERVER_VIDEO, &msg);
+ 					}
+ 					else if( node->video_channel == 1 ) {
++						log_qcy(DEBUG_INFO,"MISS: MSG_VIDEO2_STOP");
+ 						msg.message = MSG_VIDEO2_STOP;
+ 						msg.arg_pass.cat = MISS_ASYN_VIDEO2_STOP;
+ 						manager_common_send_message(SERVER_VIDEO2, &msg);
+ 					}
+ 					if( node->audio ) {
++						log_qcy(DEBUG_INFO,"MISS: MSG_AUDIO_STOP");
+ 						msg.message = MSG_AUDIO_STOP;
+ 						msg.arg_pass.cat = MISS_ASYN_AUDIO_STOP;
+ 						manager_common_send_message(SERVER_AUDIO, &msg);
+@@ -1866,6 +1909,7 @@ static void session_task_playback(session_node_t *node)
+ 			if( miss_check_video_channel(node) || miss_check_audio_channel(node)	) {
+ 				if( miss_check_audio_channel(node) ) {
+ 					if( node->source == SOURCE_LIVE ){
++						log_qcy(DEBUG_INFO,"MISS: MSG_AUDIO_STOP");
+ 						msg.message = MSG_AUDIO_STOP;
+ 						msg.arg_pass.cat = MISS_ASYN_AUDIO_STOP;
+ 						manager_common_send_message(SERVER_AUDIO, &msg);
+@@ -1874,33 +1918,41 @@ static void session_task_playback(session_node_t *node)
+ 				if( miss_check_video_channel(node) ) {
+ 					if( node->source == SOURCE_LIVE ){
+ 						if( node->video_channel == 0) {
++							log_qcy(DEBUG_INFO,"MISS: MSG_VIDEO_STOP");
+ 							msg.message = MSG_VIDEO_STOP;
+ 							msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
+ 							manager_common_send_message(SERVER_VIDEO, &msg);
+ 						}
+ 						else if( node->video_channel == 1) {
++							log_qcy(DEBUG_INFO,"MISS: MSG_VIDEO2_STOP");
+ 							msg.message = MSG_VIDEO2_STOP;
+ 							msg.arg_pass.cat = MISS_ASYN_VIDEO2_STOP;
+ 							manager_common_send_message(SERVER_VIDEO2, &msg);
+ 						}
+ 					}
+ 				}
++				node->task.status = TASK_IDLE;
+ 			}
+-			else {
++			break;
++		}
++		case TASK_IDLE:
++			if( (!miss_check_video_channel(node) ) && (!miss_check_audio_channel(node)) ) {
+ 				node->task.status = TASK_RUN;
+ 			}
+ 			break;
+-		}
+ 		case TASK_RUN: {
+ 			if(node->task.msg_lock)
+ 				node->task.msg_lock = 0;
+ 			if( node->audio_switch ){
+ 				if( node->audio ) {
++					log_qcy(DEBUG_INFO,"MISS: MSG_PLAYER_AUDIO_START");
+ 					msg.message = MSG_PLAYER_AUDIO_START;
+ 					msg.arg_pass.cat = MISS_ASYN_PLAYER_AUDIO_START;
+ 					manager_common_send_message(SERVER_PLAYER, &msg);
+ 				}
+-				else{		msg.message = MSG_PLAYER_AUDIO_STOP;
++				else{
++					log_qcy(DEBUG_INFO,"MISS: MSG_PLAYER_AUDIO_STOP");
++					msg.message = MSG_PLAYER_AUDIO_STOP;
+ 					msg.arg_pass.cat = MISS_ASYN_PLAYER_AUDIO_STOP;
+ 					manager_common_send_message(SERVER_PLAYER, &msg);
+ 				}
+@@ -1908,11 +1960,13 @@ static void session_task_playback(session_node_t *node)
+ 			}
+ 			if( node->video_switch ){
+ 				if( node->video ) {
++					log_qcy(DEBUG_INFO,"MISS: MSG_PLAYER_START");
+ 					msg.message = MSG_PLAYER_START;
+ 					msg.arg_pass.cat = MISS_ASYN_PLAYER_START;
+ 					manager_common_send_message(SERVER_PLAYER, &msg);
+ 				}
+ 				else{
++					log_qcy(DEBUG_INFO,"MISS: MSG_PLAYER_STOP");
+ 					msg.message = MSG_PLAYER_STOP;
+ 					msg.arg_pass.cat = MISS_ASYN_PLAYER_STOP;
+ 					manager_common_send_message(SERVER_PLAYER, &msg);
+@@ -1949,7 +2003,7 @@ exit2:
+ exit:
+ 	if( player[node->id].switch_to_live ) {
+ //		node->video = node->video_switch = 1;
+-//		node->video = 1;
++		node->video = 1;
+ 		if( player[node->id].switch_to_live_audio) {
+ 			node->audio = node->audio_switch = 1;
+ 			node->audio = 1;
+@@ -2366,7 +2420,7 @@ static void *server_func(void)
+     signal(SIGTERM, server_thread_termination);
+ 	misc_set_thread_name("server_miss");
+ 	pthread_detach(pthread_self());
+-	msg_buffer_init2(&message, MSG_BUFFER_OVERFLOW_NO, &mutex);
++	msg_buffer_init2(&message, _config_.miss_avmsg_overrun, &mutex);
+ 	//default task
+ 	info.init = 1;
+ 	info.task.func = task_default;
+@@ -2447,8 +2501,10 @@ int server_miss_video_message(message_t *msg)
+ 		return MISS_LOCAL_ERR_AV_NOT_RUN;
+ 	}
+ 	ret = msg_buffer_push(&video_buff[id], msg);
+-	if( ret!=0 )
++	if( ret!=0 ) {
+ 		log_qcy(DEBUG_INFO, "message push in miss video error =%d", ret);
++		ret = MISS_LOCAL_ERR_MSG_BUFF_FULL;
++	}
+ 	else {
+ 		pthread_cond_signal(&vcond[id]);
+ 	}
+@@ -2485,8 +2541,10 @@ int server_miss_audio_message(message_t *msg)
+ 		return MISS_LOCAL_ERR_AV_NOT_RUN;
+ 	}
+ 	ret = msg_buffer_push(&audio_buff[id], msg);
+-	if( ret!=0 )
++	if( ret!=0 ) {
+ 		log_qcy(DEBUG_INFO, "message push in miss audio error =%d", ret);
++		ret = MISS_LOCAL_ERR_MSG_BUFF_FULL;
++	}
+ 	else {
+ 		pthread_cond_signal(&acond[id]);
+ 	}
+diff --git a/miss_interface.h b/miss_interface.h
+index f505707..1b3878b 100644
+--- a/miss_interface.h
++++ b/miss_interface.h
+@@ -16,7 +16,7 @@
+ /*
+  * define
+  */
+-#define		SERVER_MISS_VERSION_STRING			"alpha-5.2"
++#define		SERVER_MISS_VERSION_STRING			"alpha-7.0"
+ 
+ #define		MSG_MISS_BASE						(SERVER_MISS<<16)
+ #define		MSG_MISS_SIGINT						(MSG_MISS_BASE | 0x0000)
+@@ -66,6 +66,7 @@
+ #define		MISS_LOCAL_ERR_SESSION_GONE		130
+ #define		MISS_LOCAL_ERR_AV_NOT_RUN		131
+ #define		MISS_LOCAL_ERR_PARAM			132
++#define		MISS_LOCAL_ERR_MSG_BUFF_FULL	133
+ /*
+  * structure
+  */

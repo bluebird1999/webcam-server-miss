@@ -1931,8 +1931,8 @@ static void session_task_playback(session_node_t *node)
 						}
 					}
 				}
-				node->task.status = TASK_IDLE;
 			}
+			node->task.status = TASK_IDLE;
 			break;
 		}
 		case TASK_IDLE:
