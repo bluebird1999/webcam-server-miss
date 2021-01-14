@@ -38,7 +38,7 @@
 //program header
 #include "../../tools/tools_interface.h"
 #include "../../server/miio/miio_interface.h"
-#include "../../server/speaker/speaker_interface.h"
+#include "../../server/audio/audio_interface.h"
 #include "../../server/player/player_interface.h"
 //server header
 #include "miss.h"
@@ -202,12 +202,12 @@ void miss_on_audio_data(miss_session_t *session,
     if (frame_header->length > 0) {
         /********message body********/
     	msg_init(&msg);
-    	msg.message = MSG_SPEAKER_CTL_DATA;
+    	msg.message = MSG_AUDIO_SPEAKER_CTL_DATA;
     	msg.sender = msg.receiver = SERVER_MISS;
     	msg.arg_in.cat = SPEAKER_CTL_INTERCOM_DATA;
     	msg.arg = data;
     	msg.arg_size = frame_header->length;
-    	ret = manager_common_send_message(SERVER_SPEAKER,    &msg);
+    	ret = manager_common_send_message(SERVER_AUDIO,    &msg);
     	/***************************/
     }
 }

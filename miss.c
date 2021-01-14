@@ -43,7 +43,6 @@
 #include "../../server/audio/audio_interface.h"
 #include "../../server/realtek/realtek_interface.h"
 #include "../../server/player/player_interface.h"
-#include "../../server/speaker/speaker_interface.h"
 #include "../../server/device/device_interface.h"
 #include "../../server/video/video_interface.h"
 #include "../../server/video2/video2_interface.h"
@@ -1162,7 +1161,7 @@ int miss_cmd_speaker_start(int session_id, miss_session_t *session, char *param)
 	}
     /********message body********/
 	msg_init(&msg);
-	msg.message = MSG_SPEAKER_CTL_PLAY;
+	msg.message = MSG_AUDIO_SPEAKER_CTL_PLAY;
 	msg.sender = msg.receiver = SERVER_MISS;
 	msg.arg_in.cat = SPEAKER_CTL_INTERCOM_START;
 	msg.arg_in.wolf = session_id;
@@ -1170,7 +1169,7 @@ int miss_cmd_speaker_start(int session_id, miss_session_t *session, char *param)
 	msg.arg_pass.cat = MISS_ASYN_SPEAKER_START;
 	msg.arg_pass.wolf = session_id;
 	msg.arg_pass.handler = session;
-	manager_common_send_message(SERVER_SPEAKER, &msg);
+	manager_common_send_message(SERVER_AUDIO, &msg);
 	/****************************/
     if( node->task.func == session_task_none ) {
     	if(node->audio_status == STREAM_NONE) {
@@ -1210,7 +1209,7 @@ int miss_cmd_speaker_stop(int session_id, miss_session_t *session, char *param)
 	}
     /********message body********/
 	msg_init(&msg);
-	msg.message = MSG_SPEAKER_CTL_PLAY;
+	msg.message = MSG_AUDIO_SPEAKER_CTL_PLAY;
 	msg.sender = msg.receiver = SERVER_MISS;
 	msg.arg_in.cat = SPEAKER_CTL_INTERCOM_STOP;
 	msg.arg_in.wolf = session_id;
@@ -1218,7 +1217,7 @@ int miss_cmd_speaker_stop(int session_id, miss_session_t *session, char *param)
 	msg.arg_pass.cat = MISS_ASYN_SPEAKER_STOP;
 	msg.arg_pass.wolf = session_id;
 	msg.arg_pass.handler = session;
-	manager_common_send_message(SERVER_SPEAKER, &msg);
+	manager_common_send_message(SERVER_AUDIO, &msg);
 	/****************************/
     if( node->task.func == session_task_none ) {
     	if( node->audio_status == STREAM_START)  {
@@ -1248,7 +1247,7 @@ int miss_cmd_motor_ctrl(int session_id, miss_session_t *session,char *param)
 {
     int ret = 0;
 	message_t msg;
-    static int direction = 0, op = 0;
+	int direction = -1, op = 0;
     log_qcy(DEBUG_INFO, "motor param string content: %s", param);
 	pthread_rwlock_rdlock(&ilock);
 	session_node_t *node = miss_session_check_node(session);
@@ -1266,10 +1265,11 @@ int miss_cmd_motor_ctrl(int session_id, miss_session_t *session,char *param)
 		log_qcy(DEBUG_INFO, "motor operation: %d", (int)op);
 	}
     /********message body********/
-    if( op != 0 && direction ) {
+	if( /*op != 0 && */direction != -1) {
 		msg_init(&msg);
 		msg.sender = msg.receiver = SERVER_MISS;
 		msg.message = MSG_DEVICE_CTRL_DIRECT;
+		msg.arg_in.dog = DEVICE_CTRL_MOTOR_AUTO;
 		if(  direction == 1 )
 			msg.arg_in.cat = DEVICE_CTRL_MOTOR_VER_UP;
 		else if( direction == 2)
@@ -1287,7 +1287,9 @@ int miss_cmd_motor_ctrl(int session_id, miss_session_t *session,char *param)
 		else if( direction == 8)
 			msg.arg_in.cat = DEVICE_CTRL_MOTOR_RIGHT_DOWN;
 		else if( direction == 10)
-			msg.arg_in.cat = DEVICE_CTRL_MOTOR_RESET;
+			msg.arg_in.dog = msg.arg_in.cat = DEVICE_CTRL_MOTOR_RESET;
+		else if( direction == 0)
+			msg.arg_in.dog = msg.arg_in.cat = DEVICE_CTRL_MOTOR_STOP;
 		msg.arg_in.wolf = session_id;
 		msg.arg_in.handler = session;
 		msg.arg_pass.cat = MISS_ASYN_MOTOR_CTRL;
@@ -2196,7 +2198,7 @@ static int server_message_proc(void)
 		case MSG_VIDEO2_PROPERTY_SET_EXT_ACK:
 		case MSG_VIDEO2_PROPERTY_SET_DIRECT_ACK:
 		case MSG_PLAYER_PROPERTY_SET_ACK:
-		case MSG_SPEAKER_CTL_PLAY_ACK:
+		case MSG_AUDIO_SPEAKER_CTL_PLAY_ACK:
 		case MSG_PLAYER_REQUEST_ACK:
 		case MSG_PLAYER_RELAY_ACK:
 		case MSG_PLAYER_FINISH:
