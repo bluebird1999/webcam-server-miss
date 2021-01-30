@@ -211,6 +211,7 @@ static int miss_rdt_send_msg(miss_session_t *session, void *msg, int len)
 static int miss_get_player_infomation_ack(message_t *msg)
 {
 	int ret = 0;
+	int i = 0;
 	miss_session_t	*session;
 	pthread_rwlock_rdlock(&ilock);
 	session = msg->arg_pass.handler;
@@ -363,6 +364,7 @@ static int miss_message_callback(message_t *arg)
 				miss_helper_activate_stream(pnod->id, 0);
 				miss_helper_activate_stream(pnod->id, 1);
 			}
+			log_qcy(DEBUG_INFO, "========stop player video/audio stream thread=========arg->result != 0");
 			ret = miss_cmd_send(session, MISS_CMD_PLAYBACK_RESP, (void*)&arg->result, sizeof(int));
 			break;
 		case MISS_ASYN_PLAYER_AUDIO_START:
@@ -458,7 +460,7 @@ static void *session_stream_send_video_func(void *arg)
     		continue;
     	}
     	else if(ret == MISS_ERR_INVALID_ARG ) {
-    		break;
+    	    log_qcy(DEBUG_WARNING, "send video buffer error happen MISS_ERR_INVALID_ARG");
     	}
     }
 exit:
@@ -520,7 +522,7 @@ static void *session_stream_send_audio_func(void *arg)
     		continue;
     	}
     	else if(ret == MISS_ERR_INVALID_ARG ) {
-    		break;
+    		log_qcy(DEBUG_WARNING, "send video buffer error happen MISS_ERR_INVALID_ARG");
     	}
     }
 exit:
@@ -565,15 +567,15 @@ static int session_send_video_stream(session_node_t* node, message_t *msg)
 	frame_info.codec_id = MISS_CODEC_VIDEO_H264;
 	frame_info.flags = info->flag;
 	if( (node->video_frame == 0) && (node->audio_frame==0)) {
-		miss_session_query(node->session, MISS_QUERY_CMD_SEND_CLEAR_BUFFER, NULL);
+//		miss_session_query(node->session, MISS_QUERY_CMD_SEND_CLEAR_BUFFER, NULL);
 		log_qcy(DEBUG_INFO, "clear buffer before send new stream!");
 	}
 	ret = miss_video_send(node->session, &frame_info, data);
 	if ( ret !=0 ) {
-		log_qcy(DEBUG_VERBOSE, "send miss-video data error: %d, size: %d", ret, frame_info.length);
+		log_qcy(DEBUG_VERBOSE, "send miss-video data error: %d, size: %d, session is %p", ret, frame_info.length, node->session);
 		if( ret == MISS_ERR_NO_BUFFER ) {
 			if( buffer_block > MISS_LOCAL_MAX_NO_BUFFER_TIMES ) {
-				miss_session_query(node->session, MISS_QUERY_CMD_SEND_CLEAR_BUFFER, NULL);
+//				miss_session_query(node->session, MISS_QUERY_CMD_SEND_CLEAR_BUFFER, NULL);
 				log_qcy(DEBUG_INFO, "send buffer cleared!");
 				buffer_block = 0;
 				/**********************************/
@@ -635,7 +637,7 @@ static int session_send_audio_stream(session_node_t *node, message_t *msg)
     frame_info.flags = info->flag;
 	//send stream to miss
 	if( (node->video_frame == 0) && (node->audio_frame==0)) {
-		miss_session_query(node->session, MISS_QUERY_CMD_SEND_CLEAR_BUFFER, NULL);
+//		miss_session_query(node->session, MISS_QUERY_CMD_SEND_CLEAR_BUFFER, NULL);
 		log_qcy(DEBUG_INFO, "clear buffer before send new stream!");
 	}
 	ret = miss_video_send(node->session, &frame_info, data);
@@ -643,7 +645,7 @@ static int session_send_audio_stream(session_node_t *node, message_t *msg)
 		log_qcy(DEBUG_VERBOSE, "send miss-audio data error: %d, size: %d", ret, frame_info.length);
 		if( ret == MISS_ERR_NO_BUFFER ) {
 			if( buffer_block > MISS_LOCAL_MAX_NO_BUFFER_TIMES ) {
-				miss_session_query(node->session, MISS_QUERY_CMD_SEND_CLEAR_BUFFER, NULL);
+//				miss_session_query(node->session, MISS_QUERY_CMD_SEND_CLEAR_BUFFER, NULL);
 				log_qcy(DEBUG_INFO, "send buffer cleared!");
 				buffer_block = 0;
 			}
@@ -683,7 +685,7 @@ static int miss_rpc_send_proc(message_t *msg)
 	    	else if( strstr( (char*)msg->arg, "offline") != NULL ) {
 	    		if( client_session.miss_server_ready == 0 ) {
 	    			info.status = STATUS_RESTART;
-	    			log_qcy(DEBUG_INFO, "-------offline found, try to start miss server");
+	    			log_qcy(DEBUG_INFO, "-------offline found, try to restart miss server");
 	    		}
 	    	}
 	    	else if( strstr( (char*)msg->arg, "try out") != NULL ) {
@@ -1268,6 +1270,23 @@ int miss_cmd_motor_ctrl(int session_id, miss_session_t *session,char *param)
 	if( /*op != 0 && */direction != -1) {
 		msg_init(&msg);
 		msg.sender = msg.receiver = SERVER_MISS;
+		msg.message = MSG_AUDIO_CTL;
+		msg.arg_in.cat = AUDIO_CTL_MOTOR;
+		if( direction == 0)
+			msg.arg_in.dog = 0;
+		else
+		{
+			if(direction == 10)
+				msg.arg_in.dog = DEVICE_CTRL_MOTOR_RESET;
+			else
+				msg.arg_in.dog = 1;
+		}
+		ret = server_audio_message(&msg);
+
+		//usleep(1000 * 50); //50ms
+
+		msg_init(&msg);
+		msg.sender = msg.receiver = SERVER_MISS;
 		msg.message = MSG_DEVICE_CTRL_DIRECT;
 		msg.arg_in.dog = DEVICE_CTRL_MOTOR_AUTO;
 		if(  direction == 1 )
@@ -1502,13 +1521,22 @@ int miss_cmd_player_set_speed(int session_id, miss_session_t *session, char *par
     int	speed;
 	ret = json_verify_get_int(param, "speed", (int *)&speed);
 	if (ret < 0) {
-		speed = 1;
+		speed = 2;
 	} else {
 		if (speed != 1 && speed != 2 && speed != 3 && speed != 4 ) {
 			log_qcy(DEBUG_WARNING, "speed can only be 1/2/3/4 for now");
 				return -1;
 		}
 	}
+	if( speed == 1)
+		speed = 0;
+	else if( speed == 2)
+		speed = 1;
+	else if( speed == 3)
+		speed = 2;
+	else if( speed == 4)
+		speed = 4;
+	log_qcy(DEBUG_INFO, "playback set speed is %d",speed);
 	pthread_rwlock_rdlock(&ilock);
 	session_node_t *node = miss_session_check_node(session);
 	if( (node == NULL) ) {
@@ -1633,7 +1661,7 @@ static int miss_rdt_proc(message_t *msg)
         	message.message = MSG_PLAYER_GET_FILE_LIST;
         	message.sender = message.receiver = SERVER_MISS;
         	message.arg_in.cat = (unsigned int)time_date_to_stamp(starttime);// - _config_.timezone * 3600);
-        	message.arg_in.dog = (unsigned int)time_date_to_stamp(endtime);// - _config_.timezone * 3600);
+        	message.arg_in.dog = (unsigned int)time_date_to_stamp(endtime) + 60;// - _config_.timezone * 3600);
         	message.arg_in.duck = cmd_type;
         	message.arg_in.chick = 1;
         	message.arg_in.wolf = session_id;
@@ -2463,7 +2491,7 @@ int server_miss_message(message_t *msg)
 		return MISS_LOCAL_ERR_MISS_GONE;
 	}
 	ret = msg_buffer_push(&message, msg);
-	log_qcy(DEBUG_VERBOSE, "push into the miss message queue: sender=%d, message=%x, ret=%d, head=%d, tail=%d", msg->sender, msg->message, ret,
+	log_qcy(DEBUG_SERIOUS, "push into the miss message queue: sender=%d, message=%x, ret=%d, head=%d, tail=%d", msg->sender, msg->message, ret,
 			message.head, message.tail);
 	if( ret!=0 )
 		log_qcy(DEBUG_INFO, "message push in miss error =%d", ret);
