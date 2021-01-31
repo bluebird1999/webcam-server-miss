@@ -16,7 +16,7 @@
 /*
  * define
  */
-#define		SERVER_MISS_VERSION_STRING			"alpha-8.1"
+#define		SERVER_MISS_VERSION_STRING			"alpha-8.2"
 
 #define		MSG_MISS_BASE						(SERVER_MISS<<16)
 #define		MSG_MISS_SIGINT						(MSG_MISS_BASE | 0x0000)
@@ -82,6 +82,30 @@ enum cmdtype {
 	GET_RECORD_PICTURE = 5,
 	GET_RECORD_MSG = 6
 };
+
+typedef enum {
+	CHANNEL_VIDEO_0 = 0,
+	CHANNEL_VIDEO_1,
+	CHANNEL_VIDEO_2,
+	CHANNEL_VIDEO_PLAYER_0,
+} channel_video_t;
+
+typedef enum {
+	CHANNEL_AUDIO_0 = 0,
+	CHANNEL_AUDIO_PLAYER_0,
+} channel_audio_t;
+
+typedef enum stream_source_type_t {
+	SOURCE_NONE =  0,
+	SOURCE_LIVE,
+	SOURCE_PLAYER,
+} stream_source_type_t;
+
+typedef enum stream_status_t {
+	STREAM_NONE = 0,
+	STREAM_START,
+	STREAM_STOP
+} stream_status_t;
 
 typedef struct miss_date_time_t {
     unsigned long    dwYear;
