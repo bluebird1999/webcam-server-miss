@@ -263,14 +263,14 @@ static int miss_message_callback(message_t *arg)
 		case MISS_ASYN_VIDEO_START:
 			log_qcy(DEBUG_INFO, "========start new video stream thread=========");
 			pnod->video_status = STREAM_START;
-			pnod->video_channel = arg->arg_pass.duck;
+			pnod->video_channel = CHANNEL_VIDEO_0;
 			pnod->video_frame = 0;
 			pthread_create(&pnod->video_tid, NULL, session_stream_send_video_func, (void*)pnod);
 			break;
 		case MISS_ASYN_VIDEO2_START:
 			log_qcy(DEBUG_INFO, "========start new video2 stream thread=========");
 			pnod->video_status = STREAM_START;
-			pnod->video_channel = arg->arg_pass.duck;
+			pnod->video_channel = CHANNEL_VIDEO_1;
 			pnod->video_frame = 0;
 			pthread_create(&pnod->video_tid, NULL, session_stream_send_video_func, (void*)pnod);
 			break;
@@ -295,7 +295,7 @@ static int miss_message_callback(message_t *arg)
 		case MISS_ASYN_AUDIO_START:
 			log_qcy(DEBUG_INFO, "========start new audio stream thread=========");
 			pnod->audio_status = STREAM_START;
-			pnod->audio_channel = arg->arg_pass.duck;
+			pnod->audio_channel = CHANNEL_AUDIO_0;
 			pnod->audio_frame = 0;
 			pthread_create(&pnod->audio_tid, NULL, session_stream_send_audio_func, (void*)pnod);
 			break;
@@ -331,9 +331,6 @@ static int miss_message_callback(message_t *arg)
 			break;
 		case MISS_ASYN_PLAYER_REQUEST:
 			if( arg->result == 0 ) {
-				pnod->video_channel = arg->arg_pass.duck;
-				pnod->lock = 0;
-				pnod->source = SOURCE_PLAYER;
 				log_qcy(DEBUG_INFO, "========playback setting success=========");
 				if( arg->arg_in.cat == 0 )
 					pnod->task.status = TASK_WAIT;
@@ -351,6 +348,8 @@ static int miss_message_callback(message_t *arg)
 			if( arg->result == 0 ) {
 				log_qcy(DEBUG_INFO, "========start new player video stream thread=========");
 				pnod->video_status = STREAM_START;
+				pnod->video_channel = CHANNEL_VIDEO_PLAYER_0;
+				pnod->audio_channel = CHANNEL_AUDIO_PLAYER_0;
 				pthread_create(&pnod->video_tid, NULL, session_stream_send_video_func, (void*)pnod);
 			}
 			break;
@@ -364,7 +363,9 @@ static int miss_message_callback(message_t *arg)
 				miss_helper_activate_stream(pnod->id, 0);
 				miss_helper_activate_stream(pnod->id, 1);
 			}
-			log_qcy(DEBUG_INFO, "========stop player video/audio stream thread=========arg->result != 0");
+			else {
+				log_qcy(DEBUG_INFO, "========stop player video/audio stream thread=========arg->result != 0");
+			}
 			ret = miss_cmd_send(session, MISS_CMD_PLAYBACK_RESP, (void*)&arg->result, sizeof(int));
 			break;
 		case MISS_ASYN_PLAYER_AUDIO_START:
@@ -979,9 +980,9 @@ static int miss_session_status(message_t *msg)
     	    miss_list_add_tail(&(session_node->list), &(client_session.head));
     	    //***initial
     	    session_node->task.func = session_task_none;
-    	    session_node->video_channel = 0;
-    	    session_node->audio_channel = 0;
-    	    session_node->video_channel_req = 0;
+    	    session_node->video_channel = CHANNEL_VIDEO_0;
+    	    session_node->audio_channel = CHANNEL_AUDIO_0;
+    	    session_node->video_channel_req = CHANNEL_VIDEO_0;
     		//user data
     	    pSession_valu = malloc(sizeof(int));
     	    *pSession_valu = sid;
@@ -1341,34 +1342,17 @@ int miss_cmd_video_ctrl(int session_id, miss_session_t *session,char *param)
 		return MISS_LOCAL_ERR_SESSION_GONE;
 	}
 	if( node->source == SOURCE_LIVE ) {
-		if( node->video_channel == 1 ) { //only change quality when the video is of channel 1
-			if( vq != 2) { // only if the vq request is not 1080p
-				/********message body********/
-/*				msg_init(&msg);
-				msg.sender = msg.receiver = SERVER_MISS;
-				msg.message = MSG_VIDEO2_PROPERTY_SET_EXT;
-				msg.arg_in.cat = VIDEO2_PROPERTY_QUALITY;
-				msg.arg_in.wolf = session_id;
-				msg.arg_in.handler = session;
-				msg.arg = &vq;
-				msg.arg_size = sizeof(vq);
-				msg.arg_pass.cat = MISS_ASYN_VIDEO2_CTRL;
-				msg.arg_pass.wolf = session_id;
-				msg.arg_pass.handler = session;
-				server_video2_message(&msg);
-*/
-				/****************************/
-			}
-			else { //vq == 2
-				node->video_channel_req = 0;
+		if( node->video_channel == CHANNEL_VIDEO_1 ) { //only change quality when the video is of channel 1
+			if( vq == 2) { // only if the vq request is not 1080p
+				node->video_channel_req = CHANNEL_VIDEO_0;
 				node->task.status = TASK_INIT;
 				node->task.func = session_task_live;
 				node->task.msg_lock = 1;
 			}
 		}
-		else if( node->video_channel == 0) {
-			if( vq != 2) {
-				node->video_channel_req = 1;
+		else if( node->video_channel == CHANNEL_VIDEO_0) {
+			if( (vq == 0) || ( vq == 1) ) {
+				node->video_channel_req = CHANNEL_VIDEO_1;
 				node->task.status = TASK_INIT;
 				node->task.func = session_task_live;
 				node->task.msg_lock = 1;
@@ -1773,13 +1757,13 @@ static void session_task_live(session_node_t *node)
 					}
 					if( miss_check_video_channel(node) ){
 						if( node->source == SOURCE_LIVE ) {
-							if( node->video_channel == 0) {
+							if( node->video_channel == CHANNEL_VIDEO_0) {
 								log_qcy(DEBUG_INFO,"MISS: MSG_VIDEO_STOP");
 								msg.message = MSG_VIDEO_STOP;
 								msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
 								manager_common_send_message(SERVER_VIDEO, &msg);
 							}
-							else if( node->video_channel == 1) {
+							else if( node->video_channel == CHANNEL_VIDEO_1) {
 								log_qcy(DEBUG_INFO,"MISS: MSG_VIDEO2_STOP");
 								msg.message = MSG_VIDEO2_STOP;
 								msg.arg_pass.cat = MISS_ASYN_VIDEO2_STOP;
@@ -1806,17 +1790,15 @@ static void session_task_live(session_node_t *node)
 			break;
 		}
 		case TASK_SETUP: {
-			if( node->video_channel == 0 ) {
+			if( node->video_channel == CHANNEL_VIDEO_0 ) {
 				log_qcy(DEBUG_INFO,"MISS: MSG_VIDEO_START");
 				msg.message = MSG_VIDEO_START;
-				msg.arg_pass.duck = 0;
 				msg.arg_pass.cat = MISS_ASYN_VIDEO_START;
 				manager_common_send_message(SERVER_VIDEO, &msg);
 			}
-			else if( node->video_channel == 1 ) {
+			else if( node->video_channel == CHANNEL_VIDEO_1 ) {
 				log_qcy(DEBUG_INFO,"MISS: MSG_VIDEO2_START");
 				msg.message = MSG_VIDEO2_START;
-				msg.arg_pass.duck = 1;
 				msg.arg_pass.cat = MISS_ASYN_VIDEO2_START;
 				manager_common_send_message(SERVER_VIDEO2, &msg);
 			}
@@ -1865,13 +1847,13 @@ static void session_task_live(session_node_t *node)
 			}
 			if( node->video_switch ){
 				if( !node->video ) {
-					if( node->video_channel == 0 ) {
+					if( node->video_channel == CHANNEL_VIDEO_0 ) {
 						log_qcy(DEBUG_INFO,"MISS: MSG_VIDEO_STOP");
 						msg.message = MSG_VIDEO_STOP;
 						msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
 						manager_common_send_message(SERVER_VIDEO, &msg);
 					}
-					else if( node->video_channel == 1 ) {
+					else if( node->video_channel == CHANNEL_VIDEO_1 ) {
 						log_qcy(DEBUG_INFO,"MISS: MSG_VIDEO2_STOP");
 						msg.message = MSG_VIDEO2_STOP;
 						msg.arg_pass.cat = MISS_ASYN_VIDEO2_STOP;
@@ -1947,13 +1929,13 @@ static void session_task_playback(session_node_t *node)
 				}
 				if( miss_check_video_channel(node) ) {
 					if( node->source == SOURCE_LIVE ){
-						if( node->video_channel == 0) {
+						if( node->video_channel == CHANNEL_VIDEO_0) {
 							log_qcy(DEBUG_INFO,"MISS: MSG_VIDEO_STOP");
 							msg.message = MSG_VIDEO_STOP;
 							msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
 							manager_common_send_message(SERVER_VIDEO, &msg);
 						}
-						else if( node->video_channel == 1) {
+						else if( node->video_channel == CHANNEL_VIDEO_1) {
 							log_qcy(DEBUG_INFO,"MISS: MSG_VIDEO2_STOP");
 							msg.message = MSG_VIDEO2_STOP;
 							msg.arg_pass.cat = MISS_ASYN_VIDEO2_STOP;
@@ -1967,6 +1949,8 @@ static void session_task_playback(session_node_t *node)
 		}
 		case TASK_IDLE:
 			if( (!miss_check_video_channel(node) ) && (!miss_check_audio_channel(node)) ) {
+				node->lock = 0;
+				node->source = SOURCE_PLAYER;
 				node->task.status = TASK_RUN;
 			}
 			break;
@@ -2110,6 +2094,10 @@ static int miss_message_block_helper(void)
 		log_qcy(DEBUG_VERBOSE, "===miss message block, return 0 when first message is system or response message %x", msg.message);
 		return 0;
 	}
+	if( msg.message == MSG_MISS_SESSION_STATUS ) {
+		log_qcy(DEBUG_VERBOSE, "===miss message block, return 0 when first message is session status message %x", msg.message);
+		return 0;
+	}
 	node = miss_session_check_node(msg.arg_in.handler);
 	if( node==NULL ) {
 		log_qcy(DEBUG_VERBOSE, "===miss message block, return 0 when first message is not from valid session %p", msg.arg_in.handler);
@@ -2131,6 +2119,7 @@ static int miss_message_block_helper(void)
 		node = miss_session_check_node(msg.arg_in.handler);
 		if( msg_is_system(msg.message) ||
 				msg_is_response(msg.message) ||
+					(msg.message == MSG_MISS_SESSION_STATUS) ||
 									(node==NULL) ||
 										( node!=NULL && !(node->task.msg_lock) ) ) {	//find one behind system or response message
 			msg_buffer_swap(&message, 0, index);
@@ -2171,12 +2160,15 @@ static int server_message_proc(void)
 	int st;
 //condition
 	pthread_mutex_lock(&mutex);
-	if( message.head == message.tail ) {
-		if( miss_check_condition() ) {
+	if( miss_check_condition() ) {
+		if( message.head == message.tail ) {
+			pthread_cond_wait(&cond,&mutex);
+		}
+		else if( miss_message_block() ) {	//first call to message_block
 			pthread_cond_wait(&cond,&mutex);
 		}
 	}
-	if( miss_message_block() ) {
+	if( miss_message_block() ) {	//second call to message block
 		pthread_mutex_unlock(&mutex);
 		return 0;
 	}

@@ -15,6 +15,7 @@
 #include "miss_session_list.h"
 #include <pthread.h>
 #include "miss.h"
+#include "miss_interface.h"
 /*
  * define
  */
@@ -34,7 +35,7 @@
 
 #define		MISS_EXIT_CONDITION						0
 
-#define		MISS_LOCAL_MAX_NO_BUFFER_TIMES			5
+#define		MISS_LOCAL_MAX_NO_BUFFER_TIMES			3
 #define		MISS_TASK_TIMEOUT						30
 
 /*
@@ -46,18 +47,6 @@ typedef struct client_session_t{
 	int miss_server_ready;
     struct list_handle head;
 }client_session_t;
-
-typedef enum stream_status_t {
-	STREAM_NONE = 0,
-	STREAM_START,
-	STREAM_STOP
-} stream_status_t;
-
-typedef enum stream_source_type_t {
-	SOURCE_NONE =  0,
-	SOURCE_LIVE,
-	SOURCE_PLAYER,
-} stream_source_type_t;
 
 typedef struct session_task_t {
 	void			*func;
