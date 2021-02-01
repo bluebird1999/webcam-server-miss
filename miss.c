@@ -1489,7 +1489,6 @@ int miss_cmd_player_ctrl(int session_id, miss_session_t *session, char *param)
 	message.arg_pass.cat = MISS_ASYN_PLAYER_REQUEST;
 	message.arg_pass.wolf = node->id;
 	message.arg_pass.handler = session;
-	message.arg_pass.duck = 2;
 	message.arg = &player[node->id];
 	message.arg_size = sizeof(player_init_t);
 	manager_common_send_message(SERVER_PLAYER, &message);
@@ -1941,6 +1940,12 @@ static void session_task_playback(session_node_t *node)
 							msg.arg_pass.cat = MISS_ASYN_VIDEO2_STOP;
 							manager_common_send_message(SERVER_VIDEO2, &msg);
 						}
+					}
+					else if( node->source == SOURCE_PLAYER) {
+						log_qcy(DEBUG_INFO,"MISS: MSG_PLAYER_STOP");
+						msg.message = MSG_PLAYER_STOP;
+						msg.arg_pass.cat = MISS_ASYN_PLAYER_STOP;
+						manager_common_send_message(SERVER_PLAYER, &msg);
 					}
 				}
 			}
