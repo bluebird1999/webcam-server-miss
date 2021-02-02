@@ -814,17 +814,42 @@ static int miss_clean_stream(session_node_t *psession_node)
 	if( psession_node ) {
 		if( psession_node->source == SOURCE_LIVE) {
 			if( miss_check_video_channel(psession_node) ) {
-				/********message body********/
-				msg_init(&msg);
-				msg.message = MSG_VIDEO_STOP;
-				msg.sender = msg.receiver = SERVER_MISS;
-				manager_common_send_message(SERVER_VIDEO, &msg);
-				/****************************/
+				if( psession_node->video_channel == CHANNEL_VIDEO_0) {
+					/********message body********/
+					msg_init(&msg);
+					msg.message = MSG_VIDEO_STOP;
+					msg.arg_in.wolf = psession_node->id;
+					msg.arg_in.handler = psession_node->session;
+					msg.arg_pass.cat = MISS_ASYN_VIDEO_STOP;
+					msg.arg_pass.wolf = psession_node->id;
+					msg.arg_pass.handler = psession_node->session;
+					msg.sender = msg.receiver = SERVER_MISS;
+					manager_common_send_message(SERVER_VIDEO, &msg);
+					/****************************/
+				}
+				else if( psession_node->video_channel == CHANNEL_VIDEO_1) {
+					/********message body********/
+					msg_init(&msg);
+					msg.message = MSG_VIDEO2_STOP;
+					msg.arg_in.wolf = psession_node->id;
+					msg.arg_in.handler = psession_node->session;
+					msg.arg_pass.cat = MISS_ASYN_VIDEO2_STOP;
+					msg.arg_pass.wolf = psession_node->id;
+					msg.arg_pass.handler = psession_node->session;
+					msg.sender = msg.receiver = SERVER_MISS;
+					manager_common_send_message(SERVER_VIDEO2, &msg);
+					/****************************/
+				}
 			}
 			if( miss_check_audio_channel(psession_node) ) {
 				/********message body********/
 				msg_init(&msg);
 				msg.message = MSG_AUDIO_STOP;
+				msg.arg_in.wolf = psession_node->id;
+				msg.arg_in.handler = psession_node->session;
+				msg.arg_pass.cat = MISS_ASYN_AUDIO_STOP;
+				msg.arg_pass.wolf = psession_node->id;
+				msg.arg_pass.handler = psession_node->session;
 				msg.sender = msg.receiver = SERVER_MISS;
 				manager_common_send_message(SERVER_AUDIO, &msg);
 				/****************************/
@@ -836,6 +861,11 @@ static int miss_clean_stream(session_node_t *psession_node)
 				/********message body********/
 				msg_init(&msg);
 				msg.message = MSG_PLAYER_STOP;
+				msg.arg_in.wolf = psession_node->id;
+				msg.arg_in.handler = psession_node->session;
+				msg.arg_pass.cat = MISS_ASYN_PLAYER_STOP;
+				msg.arg_pass.wolf = psession_node->id;
+				msg.arg_pass.handler = psession_node->session;
 				msg.sender = msg.receiver = SERVER_MISS;
 				manager_common_send_message(SERVER_PLAYER, &msg);
 				/****************************/
@@ -844,6 +874,8 @@ static int miss_clean_stream(session_node_t *psession_node)
 		psession_node->video_status = STREAM_NONE;
 		psession_node->audio_status = STREAM_NONE;
 		psession_node->source = SOURCE_NONE;
+		misc_set_bit(&info.thread_exit,  (THREAD_VIDEO + psession_node->id), 1 );
+		misc_set_bit(&info.thread_exit,  (THREAD_AUDIO + psession_node->id), 1 );
 		miss_helper_activate_stream(psession_node->id, 0);
 		miss_helper_activate_stream(psession_node->id, 1);
 	}
@@ -998,11 +1030,14 @@ static int miss_session_status(message_t *msg)
     	        list_for_each(post, &(client_session.head)) {
     	            session_node = list_entry(post, session_node_t, list);
     	            if(session_node && session_node->session == session) {
+    	            	int tid = session_node->id;
     	            	miss_clean_stream(session_node);
     	                miss_list_del(&(session_node->list));
     	                free(session_node);
     	                client_session.use_session_num --;
     	                ret = 0;
+    	        		miss_helper_activate_stream(tid, 0);
+    	        		miss_helper_activate_stream(tid, 1);
     	                break;
     	            }
     	        }
