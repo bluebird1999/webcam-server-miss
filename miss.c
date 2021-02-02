@@ -467,6 +467,7 @@ static void *session_stream_send_video_func(void *arg)
 exit:
     msg_buffer_release2(&video_buff[sid], &vmutex[sid]);
     server_set_status(STATUS_TYPE_THREAD_START, (THREAD_VIDEO + sid), 0);
+	server_set_status(STATUS_TYPE_THREAD_EXIT, (THREAD_VIDEO + sid), 0);
     manager_common_send_dummy(SERVER_MISS);
     log_qcy(DEBUG_INFO, "-----------thread exit: server_miss_vstream %s----------", fname);
     pthread_exit(0);
@@ -529,6 +530,7 @@ static void *session_stream_send_audio_func(void *arg)
 exit:
     msg_buffer_release2(&audio_buff[sid], &amutex[sid]);
     server_set_status(STATUS_TYPE_THREAD_START, (THREAD_AUDIO + sid), 0);
+    server_set_status(STATUS_TYPE_THREAD_EXIT, (THREAD_AUDIO + sid), 0);
     manager_common_send_dummy(SERVER_MISS);
     log_qcy(DEBUG_INFO, "-----------thread exit: server_miss_astream %s----------", fname);
     pthread_exit(0);
@@ -894,6 +896,8 @@ static int server_set_status(int type, int st, int value)
 		config.status = st;
 	else if(type==STATUS_TYPE_THREAD_START)
 		misc_set_bit(&info.thread_start, st, value);
+	else if(type==STATUS_TYPE_THREAD_EXIT)
+		misc_set_bit(&info.thread_exit, st, value);
 	pthread_rwlock_unlock(&ilock);
 	return ret;
 }
